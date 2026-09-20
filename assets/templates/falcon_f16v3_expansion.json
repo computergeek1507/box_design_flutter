@@ -1,0 +1,95 @@
+{
+  "id": "falcon_f16v3_expansion",
+  "name": "Falcon F16v3 Expansion",
+  "category": "controllerAddon",
+  "entities": [
+    {
+      "type": "polyline",
+      "closed": true,
+      "vertices": [
+        {
+          "x": 0.0,
+          "y": 0.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 183.6,
+          "y": 0.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 183.6,
+          "y": 84.8,
+          "bulge": 0.0
+        },
+        {
+          "x": 0.0,
+          "y": 84.8,
+          "bulge": 0.0
+        }
+      ]
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 28.299999999999997,
+        "y": 13.5
+      },
+      "radius": 2.0
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 28.299999999999997,
+        "y": 64.3
+      },
+      "radius": 2.0
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 155.3,
+        "y": 13.5
+      },
+      "radius": 2.0
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 155.3,
+        "y": 64.3
+      },
+      "radius": 2.0
+    }
+  ],
+  "annotations": [
+    {
+      "type": "rect",
+      "x": 2.0,
+      "y": 4.0,
+      "width": 12.7,
+      "height": 12.0
+    },
+    {
+      "type": "rect",
+      "x": 168.69217391304346,
+      "y": 4.0,
+      "width": 12.7,
+      "height": 12.0
+    },
+    {
+      "type": "rect",
+      "x": 59.8,
+      "y": 64.04173913043478,
+      "width": 58.0,
+      "height": 8.3
+    },
+    {
+      "type": "rect",
+      "x": 59.8,
+      "y": 74.50782608695651,
+      "width": 58.0,
+      "height": 8.3
+    }
+  ]
+}

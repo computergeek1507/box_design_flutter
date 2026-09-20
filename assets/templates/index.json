@@ -44,6 +44,14 @@
     "file": "bud_nbf32226.json"
   },
   {
+    "id": "bud_nbf32226_dual",
+    "file": "bud_nbf32226_dual.json"
+  },
+  {
+    "id": "bud_nbf32226_half",
+    "file": "bud_nbf32226_half.json"
+  },
+  {
     "id": "cfol_distro_4",
     "file": "cfol_distro_4.json"
   },
@@ -58,6 +66,22 @@
   {
     "id": "cg1500_door",
     "file": "cg1500_door.json"
+  },
+  {
+    "id": "cg1500_long",
+    "file": "cg1500_long.json"
+  },
+  {
+    "id": "cg_2000",
+    "file": "cg_2000.json"
+  },
+  {
+    "id": "cg_2000_sm",
+    "file": "cg_2000_sm.json"
+  },
+  {
+    "id": "cg_500",
+    "file": "cg_500.json"
   },
   {
     "id": "dig_octa",
@@ -90,6 +114,10 @@
   {
     "id": "falcon_16v3_controller",
     "file": "falcon_16v3_controller.json"
+  },
+  {
+    "id": "falcon_f16v3_expansion",
+    "file": "falcon_f16v3_expansion.json"
   },
   {
     "id": "falcon_f16v3_diff_expansion",
@@ -398,6 +426,10 @@
   {
     "id": "rni_1500",
     "file": "rni_1500.json"
+  },
+  {
+    "id": "rni_1500_mini",
+    "file": "rni_1500_mini.json"
   },
   {
     "id": "sandevice_e6804",
