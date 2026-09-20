@@ -136,8 +136,13 @@ Mesh buildPlateMesh(
   );
   if (!addStandoffs) return plate;
 
+  // No standoff for a mounting hole that isn't fully on the plate (its hole
+  // is skipped by extrudePlate, so a boss there would float in mid-air).
+  bool onPlate(({Vec2 center, double radius}) hole) => _closedLoopPoints(DxfCircle(hole.center, hole.radius), arcSegments: 16)
+      .every((p) => pointInPolygon(p, split.outer));
+
   final standoffs = [
-    for (final hole in _controllerReceiverMountingHoles(project, library))
+    for (final hole in _controllerReceiverMountingHoles(project, library).where(onPlate))
       buildAnnularTube(
         center: hole.center,
         innerRadius: hole.radius,

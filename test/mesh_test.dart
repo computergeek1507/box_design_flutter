@@ -113,6 +113,24 @@ void main() {
   });
 
   group('extrudePlate', () {
+    test('skips holes that are not entirely inside the outline', () {
+      final outer = [const Vec2(0, 0), const Vec2(20, 0), const Vec2(20, 10), const Vec2(10, 20), const Vec2(0, 20)];
+      final inside = _circle(const Vec2(5, 5), 1.5);
+      final withOutsideHoles = extrudePlate(
+        outer: outer,
+        holes: [
+          inside,
+          _circle(const Vec2(18, 18), 1.5), // beyond the chamfered corner
+          _circle(const Vec2(-5, 5), 1.5), // off the left edge
+          _circle(const Vec2(20, 5), 1.5), // straddling the right edge
+        ],
+        thickness: 3,
+      );
+      _expectManifold(withOutsideHoles);
+      final onlyInside = extrudePlate(outer: outer, holes: [inside], thickness: 3);
+      expect(withOutsideHoles.triangles.length, onlyInside.triangles.length);
+    });
+
     test('produces a watertight (manifold) mesh for a plate with one hole', () {
       final mesh = extrudePlate(
         outer: _rect(10, 10),

@@ -1,5 +1,9 @@
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 
+import '../geometry/placed_entities.dart';
+import '../geometry/tessellate.dart';
 import '../geometry/transform.dart';
 import '../models/box_project.dart';
 import '../models/hole.dart';
@@ -61,6 +65,7 @@ class DesignController extends ChangeNotifier {
       );
       project = project.copyWith(placedTemplates: [...project.placedTemplates, copy]);
       selectedId = copy.id;
+      _clampIntoBox();
       notifyListeners();
       return;
     }
@@ -77,6 +82,7 @@ class DesignController extends ChangeNotifier {
       );
       project = project.copyWith(holes: [...project.holes, copy]);
       selectedId = copy.id;
+      _clampIntoBox();
       notifyListeners();
     }
   }
@@ -122,6 +128,7 @@ class DesignController extends ChangeNotifier {
     final box = template.boundingBox;
     final normalized = placeEntities(template.entities, delta: Vec2(-box.minX, -box.minY));
     project = project.copyWith(boxTemplateId: templateId, boxOutline: normalized);
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -163,6 +170,7 @@ class DesignController extends ChangeNotifier {
   void loadProject(BoxProject loaded) {
     project = loaded;
     selectedId = null;
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -179,6 +187,7 @@ class DesignController extends ChangeNotifier {
     );
     project = project.copyWith(placedTemplates: [...project.placedTemplates, placed]);
     selectedId = placed.id;
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -189,6 +198,7 @@ class DesignController extends ChangeNotifier {
           if (p.id == id) p.copyWith(position: newPosition) else p,
       ],
     );
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -199,6 +209,7 @@ class DesignController extends ChangeNotifier {
           if (p.id == id) p.copyWith(rotationDeg: rotationDeg) else p,
       ],
     );
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -211,6 +222,7 @@ class DesignController extends ChangeNotifier {
           if (p.id == id) p.withHoleDiameterOverride(diameterMm) else p,
       ],
     );
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -225,6 +237,7 @@ class DesignController extends ChangeNotifier {
     );
     project = project.copyWith(holes: [...project.holes, hole]);
     selectedId = hole.id;
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -235,6 +248,7 @@ class DesignController extends ChangeNotifier {
           if (h.id == id) update(h) else h,
       ],
     );
+    _clampIntoBox();
     notifyListeners();
   }
 
@@ -264,6 +278,47 @@ class DesignController extends ChangeNotifier {
       if (h.id == id) return h;
     }
     return null;
+  }
+
+  /// Keeps every hole and placed template entirely within the box outline's
+  /// bounding box: an item dropped, dragged, typed or loaded outside it is
+  /// pushed back in (it can't be seen, selected or cut out there anyway).
+  /// An item larger than the box is aligned to the box's min corner.
+  void _clampIntoBox() {
+    if (project.boxOutline.isEmpty) return;
+    final box = entitiesBoundingBox(project.boxOutline);
+    Vec2 shiftFor(BoundingBox b) {
+      double axis(double min, double max, double boxMin, double boxMax) {
+        if (min < boxMin - 1e-9) return boxMin - min;
+        if (max > boxMax + 1e-9) return math.max(boxMax - max, boxMin - min);
+        return 0;
+      }
+
+      return Vec2(axis(b.minX, b.maxX, box.minX, box.maxX), axis(b.minY, b.maxY, box.minY, box.maxY));
+    }
+
+    var changed = false;
+    final placed = [
+      for (final p in project.placedTemplates)
+        () {
+          final template = library.byId(p.templateId);
+          if (template == null) return p;
+          final shift = shiftFor(entitiesBoundingBox(placedTemplateEntities(template, p)));
+          if (shift.x == 0 && shift.y == 0) return p;
+          changed = true;
+          return p.copyWith(position: p.position.add(shift));
+        }(),
+    ];
+    final holes = [
+      for (final h in project.holes)
+        () {
+          final shift = shiftFor(h.boundingBox);
+          if (shift.x == 0 && shift.y == 0) return h;
+          changed = true;
+          return h.copyWith(position: h.position.add(shift));
+        }(),
+    ];
+    if (changed) project = project.copyWith(placedTemplates: placed, holes: holes);
   }
 
   @override

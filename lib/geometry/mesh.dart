@@ -24,7 +24,7 @@ class Mesh {
   const Mesh(this.vertices, this.triangles);
 }
 
-bool _pointInPolygon(Vec2 p, List<Vec2> poly) {
+bool pointInPolygon(Vec2 p, List<Vec2> poly) {
   var inside = false;
   for (var i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     final a = poly[i];
@@ -50,7 +50,7 @@ List<List<Vec2>> _dropNestedHoles(List<List<Vec2>> holesCcw) {
   for (var i = 0; i < holesCcw.length; i++) {
     final hole = holesCcw[i];
     final containedInLarger = Iterable<int>.generate(holesCcw.length).any(
-      (j) => j != i && areas[j] > areas[i] && hole.every((p) => _pointInPolygon(p, holesCcw[j])),
+      (j) => j != i && areas[j] > areas[i] && hole.every((p) => pointInPolygon(p, holesCcw[j])),
     );
     if (!containedInLarger) kept.add(hole);
   }
@@ -68,9 +68,14 @@ Mesh extrudePlate({
   var outerCcw = List<Vec2>.from(outer);
   if (signedArea(outerCcw) < 0) outerCcw = outerCcw.reversed.toList();
 
+  // A hole that isn't entirely inside the outline (e.g. a mounting hole
+  // dragged off the plate, or past a chamfered corner) has no material to
+  // cut: bridging it into the outer boundary would produce a
+  // self-intersecting polygon and a corrupt mesh, so it's skipped.
   final holesCcw = _dropNestedHoles([
     for (final h in holes)
-      if (h.length >= 3) (signedArea(h) < 0 ? h.reversed.toList() : List<Vec2>.from(h)),
+      if (h.length >= 3 && h.every((p) => pointInPolygon(p, outerCcw)))
+        (signedArea(h) < 0 ? h.reversed.toList() : List<Vec2>.from(h)),
   ]);
 
   final mergeResult = mergeHolesIntoOuter(outerCcw, holesCcw);
