@@ -45,5 +45,15 @@
       },
       "radius": 2.0
     }
+  ],
+  "annotations": [
+    {
+      "type": "text",
+      "text": "Terimals",
+      "x": 2.181159420289851,
+      "y": 4.613526570048311,
+      "height": 5.0,
+      "rotationDeg": 0.0
+    }
   ]
 }

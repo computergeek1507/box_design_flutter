@@ -53,5 +53,15 @@
       },
       "radius": 1.75
     }
+  ],
+  "annotations": [
+    {
+      "type": "text",
+      "text": "Terminals",
+      "x": 1.9971014492753643,
+      "y": 2.1724637681159393,
+      "height": 5.0,
+      "rotationDeg": 0.0
+    }
   ]
 }
