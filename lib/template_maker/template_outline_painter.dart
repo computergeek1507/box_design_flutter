@@ -25,6 +25,7 @@ class TemplateOutlinePainter extends CustomPainter {
         double slotLength,
         double slotWidth,
         double rotationDeg,
+        bool selected,
       })> holes;
 
   /// Optional tracing image, placed by [imageRectMm] (left/top = its
@@ -106,12 +107,22 @@ class TemplateOutlinePainter extends CustomPainter {
       ..color = Colors.red
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
-    for (final hole in holes) {
+    final selectedPaint = Paint()
+      ..color = Colors.lightBlue
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3;
+    final selectedFill = Paint()..color = Colors.lightBlue.withValues(alpha: 0.35);
+    // Selected hole last so it sits on top of any overlapping neighbour.
+    final ordered = [...holes.where((h) => !h.selected), ...holes.where((h) => h.selected)];
+    for (final hole in ordered) {
+      final paint = hole.selected ? selectedPaint : holePaint;
       if (hole.shape == TemplateMakerHoleShape.round) {
         final center = toPx(hole.center);
         final radiusPx = hole.diameter / 2 * scale;
-        canvas.drawCircle(center, radiusPx, holePaint);
-        _drawLabel(canvas, '⌀${hole.diameter.toStringAsFixed(1)}', center + Offset(radiusPx + 4, -radiusPx - 4));
+        if (hole.selected) canvas.drawCircle(center, radiusPx, selectedFill);
+        canvas.drawCircle(center, radiusPx, paint);
+        _drawLabel(canvas, '\u2300${hole.diameter.toStringAsFixed(1)}', center + Offset(radiusPx + 4, -radiusPx - 4),
+            bold: hole.selected);
       } else {
         final outline = DxfPolyline(
           hole.shape == TemplateMakerHoleShape.rect
@@ -119,17 +130,26 @@ class TemplateOutlinePainter extends CustomPainter {
               : stadiumVertices(hole.slotLength, hole.slotWidth),
           closed: true,
         ).transformed(delta: hole.center, rotationDeg: hole.rotationDeg);
-        final pts = outline.toPoints().map(toPx).toList();
-        canvas.drawPath(Path()..addPolygon(pts, true), holePaint);
+        final path = Path()..addPolygon(outline.toPoints().map(toPx).toList(), true);
+        if (hole.selected) canvas.drawPath(path, selectedFill);
+        canvas.drawPath(path, paint);
         final center = toPx(hole.center);
-        _drawLabel(canvas, '${hole.slotLength.toStringAsFixed(1)}x${hole.slotWidth.toStringAsFixed(1)}', center + const Offset(6, -6));
+        _drawLabel(canvas, '${hole.slotLength.toStringAsFixed(1)}x${hole.slotWidth.toStringAsFixed(1)}', center + const Offset(6, -6),
+            bold: hole.selected);
       }
     }
   }
 
-  void _drawLabel(Canvas canvas, String text, Offset at) {
+  void _drawLabel(Canvas canvas, String text, Offset at, {bool bold = false}) {
     final painter = TextPainter(
-      text: TextSpan(text: text, style: const TextStyle(color: Colors.black87, fontSize: 11)),
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: bold ? Colors.lightBlue.shade900 : Colors.black87,
+          fontSize: 11,
+          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
       textDirection: TextDirection.ltr,
     )..layout();
     painter.paint(canvas, at);

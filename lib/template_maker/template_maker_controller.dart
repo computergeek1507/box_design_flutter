@@ -132,6 +132,15 @@ class TemplateMakerController extends ChangeNotifier {
 
   Uint8List? _refPixels;
 
+  /// The hole/slot highlighted in the preview and list, if any.
+  String? selectedHoleId;
+
+  void selectHole(String? holeId) {
+    if (selectedHoleId == holeId) return;
+    selectedHoleId = holeId;
+    notifyListeners();
+  }
+
   int _nextHoleSeq = 1;
 
   void setId(String value) {
@@ -179,24 +188,28 @@ class TemplateMakerController extends ChangeNotifier {
   }
 
   void addHole() {
-    holes.add(TemplateMakerHole(
+    final hole = TemplateMakerHole(
       id: 'hole${_nextHoleSeq++}',
       x: outlineWidth / 2,
       y: outlineHeight / 2,
       diameter: 4,
-    ));
+    );
+    holes.add(hole);
+    selectedHoleId = hole.id;
     notifyListeners();
   }
 
   void addSlot() {
-    holes.add(TemplateMakerHole(
+    final hole = TemplateMakerHole(
       id: 'hole${_nextHoleSeq++}',
       x: outlineWidth / 2,
       y: outlineHeight / 2,
       shape: TemplateMakerHoleShape.slot,
       slotLength: 12,
       slotWidth: 4,
-    ));
+    );
+    holes.add(hole);
+    selectedHoleId = hole.id;
     notifyListeners();
   }
 
@@ -239,6 +252,7 @@ class TemplateMakerController extends ChangeNotifier {
 
   void removeHole(String holeId) {
     holes.removeWhere((h) => h.id == holeId);
+    if (selectedHoleId == holeId) selectedHoleId = null;
     notifyListeners();
   }
 
@@ -448,6 +462,7 @@ class TemplateMakerController extends ChangeNotifier {
     cornerStyle = TemplateMakerCornerStyle.fillet;
     cornerSize = 0;
     holes.clear();
+    selectedHoleId = null;
     _nextHoleSeq = 1;
     notifyListeners();
   }
@@ -607,6 +622,7 @@ class TemplateMakerController extends ChangeNotifier {
     }
 
     holes.clear();
+    selectedHoleId = null;
     _nextHoleSeq = 1;
     // In the fallback case above (nothing looked like a hole) there's
     // nothing left to extract as a hole either.

@@ -12,6 +12,7 @@ Future<ui.Image> _image(int w, int h) {
 }
 
 void main() {
+  _selectionTests();
   _imageOpsTests();
   _detectionTests();
 }
@@ -107,5 +108,22 @@ void _detectionTests() {
     expect((r.x, r.y), (30.0, 40.0));
     expect((r.slotLength, r.slotWidth), (10.0, 6.0));
     expect(r.rotationDeg, closeTo(90, 1e-6));
+  });
+}
+
+void _selectionTests() {
+  test('adding selects the new hole; removing the selected hole clears the selection', () {
+    final c = TemplateMakerController();
+    c.addHole();
+    final first = c.holes.single.id;
+    expect(c.selectedHoleId, first);
+    c.addSlot();
+    final second = c.holes.last.id;
+    expect(c.selectedHoleId, second);
+    c.selectHole(first);
+    c.removeHole(second);
+    expect(c.selectedHoleId, first);
+    c.removeHole(first);
+    expect(c.selectedHoleId, isNull);
   });
 }

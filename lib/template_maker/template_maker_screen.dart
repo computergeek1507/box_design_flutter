@@ -57,6 +57,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   String? _draggingHoleId;
   _ImageDrag _imageDrag = _ImageDrag.none;
   Rect? _frozenView;
+  final Map<String, GlobalKey> _holeRowKeys = {};
 
   /// While true the Id follows the Name (slugified); typing in the Id field
   /// itself turns it off. Starts on only if the loaded Id already matches its
@@ -301,6 +302,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     final mm = _previewPxToMm(details.localPosition, size);
     _imageDrag = _ImageDrag.none;
     _draggingHoleId = _holeNear(mm, scale)?.id;
+    if (_draggingHoleId != null) _selectHoleFromPreview(_draggingHoleId!);
     if (_draggingHoleId != null || _controller.refImage == null) return;
 
     final c = _controller;
@@ -317,6 +319,25 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     if (mm.x >= left && mm.x <= right && mm.y >= bottom && mm.y <= top) {
       _imageDrag = _ImageDrag.move;
       _imageGrabOffset = Vec2(mm.x - left, mm.y - bottom);
+    }
+  }
+
+  void _selectHoleFromPreview(String holeId) {
+    setState(() => _controller.selectHole(holeId));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final rowContext = _holeRowKeys[holeId]?.currentContext;
+      if (rowContext != null && rowContext.mounted) {
+        Scrollable.ensureVisible(rowContext, duration: const Duration(milliseconds: 150), alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+      }
+    });
+  }
+
+  void _onPreviewTapDown(TapDownDetails details, Size size) {
+    final hit = _holeNear(_previewPxToMm(details.localPosition, size), _previewScale(size));
+    if (hit != null) {
+      _selectHoleFromPreview(hit.id);
+    } else {
+      setState(() => _controller.selectHole(null));
     }
   }
 
@@ -991,6 +1012,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                     animation: _controller,
                     builder: (context, _) => GestureDetector(
                       behavior: HitTestBehavior.opaque,
+                      onTapDown: (details) => _onPreviewTapDown(details, size),
                       onPanStart: (details) => _onPreviewPanStart(details, size),
                       onPanUpdate: (details) => _onPreviewPanUpdate(details, size),
                       onPanEnd: _onPreviewPanEnd,
@@ -1014,6 +1036,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                                 slotLength: h.slotLength,
                                 slotWidth: h.slotWidth,
                                 rotationDeg: h.rotationDeg,
+                                selected: h.id == _controller.selectedHoleId,
                               ),
                           ],
                         ),
@@ -1034,9 +1057,32 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     final hole = _controller.holes.firstWhere((h) => h.id == holeId);
     final isSlot = hole.shape != TemplateMakerHoleShape.round;
     final isRect = hole.shape == TemplateMakerHoleShape.rect;
+    final selected = _controller.selectedHoleId == holeId;
+    final scheme = Theme.of(context).colorScheme;
+    void select() {
+      if (_controller.selectedHoleId != holeId) setState(() => _controller.selectHole(holeId));
+    }
+
     return Padding(
+      key: _holeRowKeys.putIfAbsent(holeId, GlobalKey.new),
       padding: const EdgeInsets.only(top: 8),
-      child: Column(
+      child: Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onFocusChange: (hasFocus) {
+          if (hasFocus) select();
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: select,
+          child: Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: selected ? Colors.lightBlue.withValues(alpha: 0.12) : null,
+              border: Border.all(color: selected ? Colors.lightBlue : scheme.outlineVariant.withValues(alpha: 0.0), width: selected ? 2 : 1),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -1177,6 +1223,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
           ],
           const Divider(height: 16),
         ],
+            ),
+          ),
+        ),
       ),
     );
   }
