@@ -1,0 +1,285 @@
+{
+  "id": "bud_nbf32226_dual",
+  "name": "BUD NBF-32226 Dual",
+  "category": "box",
+  "entities": [
+    {
+      "type": "polyline",
+      "closed": true,
+      "vertices": [
+        {
+          "x": 8.0,
+          "y": 0.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 0.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 8.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 352.8,
+          "y": 8.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 352.8,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 252.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 8.0,
+          "y": 252.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 8.0,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 0.0,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 0.0,
+          "y": 8.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 8.0,
+          "y": 8.0,
+          "bulge": 0.0
+        }
+      ]
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 13.75,
+        "y": 11.1
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 13.75,
+        "y": 240.9
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 339.05,
+        "y": 11.1
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 339.05,
+        "y": 240.9
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 122.2,
+        "y": 11.1
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 122.2,
+        "y": 240.9
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 230.6,
+        "y": 11.1
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 230.6,
+        "y": 240.9
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 13.8,
+        "y": 126.0
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 339.1,
+        "y": 126.0
+      },
+      "radius": 2.5
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 20.0,
+        "y": 35.0
+      },
+      "radius": 3.25
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 20.0,
+        "y": 217.0
+      },
+      "radius": 3.25
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 332.8,
+        "y": 35.0
+      },
+      "radius": 3.25
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 332.8,
+        "y": 217.0
+      },
+      "radius": 3.25
+    }
+  ],
+  "layer2Entities": [
+    {
+      "type": "polyline",
+      "closed": true,
+      "vertices": [
+        {
+          "x": 8.0,
+          "y": 0.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 0.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 8.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 352.8,
+          "y": 8.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 352.8,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 344.8,
+          "y": 252.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 8.0,
+          "y": 252.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 8.0,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 0.0,
+          "y": 244.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 0.0,
+          "y": 8.0,
+          "bulge": 0.0
+        },
+        {
+          "x": 8.0,
+          "y": 8.0,
+          "bulge": 0.0
+        }
+      ]
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 332.8,
+        "y": 217.0
+      },
+      "radius": 3.25
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 332.8,
+        "y": 35.0
+      },
+      "radius": 3.25
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 20.0,
+        "y": 217.0
+      },
+      "radius": 3.25
+    },
+    {
+      "type": "circle",
+      "center": {
+        "x": 20.0,
+        "y": 35.0
+      },
+      "radius": 3.25
+    }
+  ]
+}

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../dxf/dxf_parser.dart';
+import '../models/annotation.dart';
 import '../models/controller_template.dart';
 import '../models/vec2.dart';
 import '../services/file_io.dart';
@@ -60,6 +61,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   _ImageDrag _imageDrag = _ImageDrag.none;
   Rect? _frozenView;
   Vec2? _measureHover;
+  String? _draggingNoteId;
+  Vec2 _lastNoteMm = const Vec2(0, 0);
+  final Map<String, TextEditingController> _noteFields = {};
   final Map<String, GlobalKey> _holeRowKeys = {};
 
   /// While true the Id follows the Name (slugified); typing in the Id field
@@ -152,6 +156,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     }
     _controller.refImage?.dispose();
     _controller.refImage = null;
+    for (final c in _noteFields.values) {
+      c.dispose();
+    }
     _widthFocus.dispose();
     _heightFocus.dispose();
     _cornerSizeFocus.dispose();
@@ -305,6 +312,13 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     final scale = _previewScale(size);
     final mm = _previewPxToMm(details.localPosition, size);
     _imageDrag = _ImageDrag.none;
+    if (_controller.layer == TemplateMakerLayer.drawing) {
+      final hit = _noteAt(mm, scale);
+      _draggingNoteId = hit?.id;
+      _lastNoteMm = mm;
+      setState(() => _controller.selectNote(hit?.id));
+      return;
+    }
     _draggingHoleId = _holeNear(mm, scale)?.id;
     if (_draggingHoleId != null) _selectHoleFromPreview(_draggingHoleId!);
     if (_draggingHoleId != null || _controller.refImage == null) return;
@@ -353,6 +367,11 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
 
   void _onPreviewTapDown(TapDownDetails details, Size size) {
     if (_controller.measureMode) return;
+    if (_controller.layer == TemplateMakerLayer.drawing) {
+      final hit = _noteAt(_previewPxToMm(details.localPosition, size), _previewScale(size));
+      setState(() => _controller.selectNote(hit?.id));
+      return;
+    }
     final hit = _holeNear(_previewPxToMm(details.localPosition, size), _previewScale(size));
     if (hit != null) {
       _selectHoleFromPreview(hit.id);
@@ -362,6 +381,17 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   }
 
   void _onPreviewPanUpdate(DragUpdateDetails details, Size size) {
+    if (_controller.layer == TemplateMakerLayer.drawing) {
+      final id = _draggingNoteId;
+      if (id == null) return;
+      final p = _previewPxToMm(details.localPosition, size);
+      setState(() {
+        _controller.moveNoteBy(id, p.x - _lastNoteMm.x, p.y - _lastNoteMm.y);
+        _refreshNoteFields();
+      });
+      _lastNoteMm = p;
+      return;
+    }
     final draggingId = _draggingHoleId;
     if (draggingId == null) {
       if (_imageDrag == _ImageDrag.none) return;
@@ -386,6 +416,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
 
   void _onPreviewPanEnd(DragEndDetails details) {
     _draggingHoleId = null;
+    _draggingNoteId = null;
     _imageDrag = _ImageDrag.none;
     setState(() => _frozenView = null);
   }
@@ -879,9 +910,20 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                     for (final c in TemplateCategory.values) DropdownMenuItem(value: c, child: Text(c.name)),
                   ],
                   onChanged: (v) {
-                    if (v != null) setState(() => _controller.setCategory(v));
+                    if (v != null) {
+                      setState(() {
+                        _controller.setCategory(v);
+                        _syncHoleControllers();
+                        _refreshTopFields();
+                      });
+                    }
                   },
                 ),
+                const SizedBox(height: 12),
+                _layerSelector(context),
+                if (_controller.layer == TemplateMakerLayer.drawing)
+                  ..._drawingSectionWidgets(context)
+                else ...[
                 const Divider(height: 32),
                 Text('Outline', style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
@@ -1032,6 +1074,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                   ],
                 ),
                 for (final hole in _controller.holes) _holeRow(hole.id),
+                ],
               ],
             ),
           ),
@@ -1060,6 +1103,10 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                       child: CustomPaint(
                         painter: TemplateOutlinePainter(
                           viewRectMm: _currentView(),
+                          drawingMode: _controller.layer == TemplateMakerLayer.drawing,
+                          notes: _controller.notes,
+                          selectedNoteId: _controller.selectedNoteId,
+                          ghostNotes: _controller.layer != TemplateMakerLayer.drawing,
                           isDark: Theme.of(context).brightness == Brightness.dark,
                           measureStart: _controller.measureStart,
                           measureEnd: _controller.measureEnd,
@@ -1095,6 +1142,239 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // ---- layers + drawing layer ----
+
+  Widget _layerSelector(BuildContext context) {
+    final c = _controller;
+    final isBox = c.category == TemplateCategory.box;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SegmentedButton<TemplateMakerLayer>(
+          showSelectedIcon: false,
+          segments: [
+            const ButtonSegment(value: TemplateMakerLayer.layer1, label: Text('Layer 1')),
+            ButtonSegment(value: TemplateMakerLayer.layer2, label: const Text('Layer 2'), enabled: c.dualLayer),
+            ButtonSegment(value: TemplateMakerLayer.drawing, label: const Text('Drawing'), enabled: !isBox),
+          ],
+          selected: {c.layer},
+          onSelectionChanged: (selection) => setState(() {
+            c.selectLayer(selection.first);
+            _syncHoleControllers();
+            _refreshTopFields();
+          }),
+        ),
+        if (isBox)
+          CheckboxListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            controlAffinity: ListTileControlAffinity.leading,
+            title: const Text('Two-layer plate'),
+            subtitle: const Text('Layer 2 sits beside layer 1 in the design and exports as its own object.'),
+            value: c.dualLayer,
+            onChanged: (v) => setState(() {
+              c.setDualLayer(v ?? false);
+              _syncHoleControllers();
+              _refreshTopFields();
+            }),
+          ),
+      ],
+    );
+  }
+
+  TemplateMakerNote? _noteAt(Vec2 mm, double scale) {
+    final tol = 10 / scale;
+    for (final n in _controller.notes.reversed) {
+      final hit = switch (n.type) {
+        AnnotationType.text => () {
+            final local = mm.subtract(Vec2(n.x, n.y)).rotated(-n.rotationDeg);
+            final w = math.max(n.text.length, 1) * n.height * 0.6;
+            return local.x >= -tol && local.x <= w + tol && local.y >= -tol && local.y <= n.height + tol;
+          }(),
+        AnnotationType.line => _distToSegment(mm, Vec2(n.x, n.y), Vec2(n.x2, n.y2)) <= tol,
+        AnnotationType.rect => mm.x >= n.x - tol && mm.x <= n.x + n.width + tol && mm.y >= n.y - tol && mm.y <= n.y + n.height + tol,
+        AnnotationType.circle => math.sqrt(math.pow(mm.x - n.x, 2) + math.pow(mm.y - n.y, 2)) <= n.radius + tol,
+      };
+      if (hit) return n;
+    }
+    return null;
+  }
+
+  double _distToSegment(Vec2 p, Vec2 a, Vec2 b) {
+    final abx = b.x - a.x, aby = b.y - a.y;
+    final lenSq = abx * abx + aby * aby;
+    var t = lenSq == 0 ? 0.0 : ((p.x - a.x) * abx + (p.y - a.y) * aby) / lenSq;
+    t = t.clamp(0.0, 1.0);
+    final dx = p.x - (a.x + abx * t), dy = p.y - (a.y + aby * t);
+    return math.sqrt(dx * dx + dy * dy);
+  }
+
+  String _noteValue(TemplateMakerNote n, String field) => switch (field) {
+        'text' => n.text,
+        'x' => _fmt(n.x),
+        'y' => _fmt(n.y),
+        'x2' => _fmt(n.x2),
+        'y2' => _fmt(n.y2),
+        'width' => _fmt(n.width),
+        'height' => _fmt(n.height),
+        'radius' => _fmt(n.radius),
+        _ => _fmt(n.rotationDeg),
+      };
+
+  void _refreshNoteFields() {
+    for (final n in _controller.notes) {
+      for (final field in const ['x', 'y', 'x2', 'y2', 'width', 'height', 'radius', 'rotation']) {
+        _noteFields['${n.id}/$field']?.text = _noteValue(n, field);
+      }
+    }
+  }
+
+  void _applyNote(String id, String field, double v) {
+    final c = _controller;
+    switch (field) {
+      case 'x':
+        c.updateNote(id, x: v);
+      case 'y':
+        c.updateNote(id, y: v);
+      case 'x2':
+        c.updateNote(id, x2: v);
+      case 'y2':
+        c.updateNote(id, y2: v);
+      case 'width':
+        c.updateNote(id, width: v);
+      case 'height':
+        c.updateNote(id, height: v);
+      case 'radius':
+        c.updateNote(id, radius: v);
+      default:
+        c.updateNote(id, rotationDeg: v);
+    }
+  }
+
+  Widget _noteField(TemplateMakerNote n, String field, String label) {
+    final isText = field == 'text';
+    final controller = _noteFields.putIfAbsent('${n.id}/$field', () => TextEditingController(text: _noteValue(n, field)));
+    void commit() {
+      if (isText) return;
+      _commitMathField(controller, (v) => _applyNote(n.id, field, v));
+    }
+
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(labelText: label, isDense: true, border: const OutlineInputBorder()),
+      keyboardType: isText ? TextInputType.text : const TextInputType.numberWithOptions(decimal: true, signed: true),
+      onTap: () => setState(() => _controller.selectNote(n.id)),
+      onChanged: (v) {
+        if (isText) {
+          setState(() => _controller.updateNote(n.id, text: v));
+          return;
+        }
+        final parsed = tryEvalMath(v);
+        if (parsed != null) setState(() => _applyNote(n.id, field, parsed));
+      },
+      onSubmitted: (_) => commit(),
+      onEditingComplete: commit,
+      onTapOutside: (_) => commit(),
+    );
+  }
+
+  List<Widget> _drawingSectionWidgets(BuildContext context) {
+    final live = _controller.notes.map((n) => n.id).toSet();
+    _noteFields.removeWhere((key, c) {
+      final stale = !live.contains(key.split('/').first);
+      if (stale) c.dispose();
+      return stale;
+    });
+    return [
+      const Divider(height: 32),
+      Text('Drawing layer', style: Theme.of(context).textTheme.titleMedium),
+      const SizedBox(height: 4),
+      Text(
+        'Notes that show how this item is placed. They appear on the canvas, PDF and DXF but are never cut or printed.',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.text)), icon: const Icon(Icons.text_fields, size: 18), label: const Text('Text')),
+          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.line)), icon: const Icon(Icons.horizontal_rule, size: 18), label: const Text('Line')),
+          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.rect)), icon: const Icon(Icons.crop_square, size: 18), label: const Text('Rectangle')),
+          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.circle)), icon: const Icon(Icons.circle_outlined, size: 18), label: const Text('Circle')),
+        ],
+      ),
+      for (final n in _controller.notes) _noteRow(context, n),
+    ];
+  }
+
+  Widget _noteRow(BuildContext context, TemplateMakerNote n) {
+    final selected = _controller.selectedNoteId == n.id;
+    final title = switch (n.type) {
+      AnnotationType.text => 'Text',
+      AnnotationType.line => 'Line',
+      AnnotationType.rect => 'Rectangle',
+      AnnotationType.circle => 'Circle',
+    };
+    Widget pair(Widget a, Widget b) => Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(children: [Expanded(child: a), const SizedBox(width: 6), Expanded(child: b)]),
+        );
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onTap: () => setState(() => _controller.selectNote(n.id)),
+        child: Container(
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: selected ? Colors.lightBlue.withValues(alpha: 0.12) : null,
+            border: Border.all(color: selected ? Colors.lightBlue : Colors.transparent, width: selected ? 2 : 1),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.labelMedium),
+                  const Spacer(),
+                  IconButton(
+                    onPressed: () => setState(() => _controller.duplicateNote(n.id)),
+                    icon: const Icon(Icons.content_copy_outlined, size: 20),
+                    tooltip: 'Duplicate ${title.toLowerCase()}',
+                  ),
+                  IconButton(
+                    onPressed: () => setState(() => _controller.removeNote(n.id)),
+                    icon: const Icon(Icons.delete_outline, size: 20),
+                    tooltip: 'Remove ${title.toLowerCase()}',
+                  ),
+                ],
+              ),
+              if (n.type == AnnotationType.text) ...[
+                _noteField(n, 'text', 'Text'),
+                pair(_noteField(n, 'x', 'X'), _noteField(n, 'y', 'Y')),
+                pair(_noteField(n, 'height', 'Height'), _noteField(n, 'rotation', 'Rotation\u00b0')),
+              ],
+              if (n.type == AnnotationType.line) ...[
+                pair(_noteField(n, 'x', 'X1'), _noteField(n, 'y', 'Y1')),
+                pair(_noteField(n, 'x2', 'X2'), _noteField(n, 'y2', 'Y2')),
+              ],
+              if (n.type == AnnotationType.rect) ...[
+                pair(_noteField(n, 'x', 'X'), _noteField(n, 'y', 'Y')),
+                pair(_noteField(n, 'width', 'Width'), _noteField(n, 'height', 'Height')),
+              ],
+              if (n.type == AnnotationType.circle) ...[
+                pair(_noteField(n, 'x', 'X'), _noteField(n, 'y', 'Y')),
+                Padding(padding: const EdgeInsets.only(top: 6), child: _noteField(n, 'radius', 'Radius')),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1135,6 +1415,27 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
             children: [
               Text(isRect ? 'Rectangle' : isSlot ? 'Slot' : 'Round hole', style: Theme.of(context).textTheme.labelMedium),
               const Spacer(),
+              if (_controller.canCopyToOtherLayer)
+                IconButton(
+                  onPressed: () {
+                    final toLayer = _controller.layer == TemplateMakerLayer.layer1 ? 2 : 1;
+                    setState(() => _controller.copyHoleToOtherLayer(holeId));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Copied to layer $toLayer'), duration: const Duration(seconds: 2)),
+                    );
+                  },
+                  icon: const Icon(Icons.file_copy_outlined, size: 20),
+                  tooltip: 'Copy ${isRect ? 'rectangle' : isSlot ? 'slot' : 'hole'} to layer ${_controller.layer == TemplateMakerLayer.layer1 ? 2 : 1}',
+                ),
+              IconButton(
+                onPressed: () => setState(() {
+                  _controller.duplicateHole(holeId);
+                  _syncHoleControllers();
+                  _refreshTopFields();
+                }),
+                icon: const Icon(Icons.content_copy_outlined, size: 20),
+                tooltip: 'Duplicate ${isRect ? 'rectangle' : isSlot ? 'slot' : 'hole'} on this layer',
+              ),
               IconButton(
                 onPressed: () => _removeHole(holeId),
                 icon: const Icon(Icons.delete_outline, size: 20),

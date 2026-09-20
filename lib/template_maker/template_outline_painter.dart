@@ -3,6 +3,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 
+import '../design/note_paint.dart';
+import '../models/annotation.dart';
 import '../models/dxf_entity.dart';
 import '../models/vec2.dart';
 import 'template_maker_controller.dart';
@@ -39,6 +41,16 @@ class TemplateOutlinePainter extends CustomPainter {
   final Rect viewRectMm;
   final bool isDark;
 
+  /// Drawing-layer mode: the plate is drawn faded as a reference and the
+  /// [notes] are drawn on top; otherwise no notes are shown.
+  final bool drawingMode;
+  final List<TemplateMakerNote> notes;
+  final String? selectedNoteId;
+
+  /// Outside drawing mode, draw the [notes] dimmed underneath the holes as a
+  /// reference (never selected, never hit-tested).
+  final bool ghostNotes;
+
   /// Measurement overlay (template mm); [measureHover] is the snap target
   /// under the cursor while measuring.
   final Vec2? measureStart;
@@ -48,6 +60,10 @@ class TemplateOutlinePainter extends CustomPainter {
   const TemplateOutlinePainter({
     this.viewRectMm = Rect.zero,
     this.isDark = false,
+    this.drawingMode = false,
+    this.notes = const [],
+    this.selectedNoteId,
+    this.ghostNotes = false,
     this.measureStart,
     this.measureEnd,
     this.measureHover,
@@ -96,8 +112,10 @@ class TemplateOutlinePainter extends CustomPainter {
       }
     }
 
+    if (!drawingMode && ghostNotes) _paintNotes(canvas, toPx, scale, ghost: true);
+
     final outlinePaint = Paint()
-      ..color = isDark ? Colors.white : Colors.black
+      ..color = (isDark ? Colors.white : Colors.black).withValues(alpha: drawingMode ? 0.3 : 1.0)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
     final cornerAmount = cornerSize <= 0 ? 0.0 : math.min(cornerSize, math.min(outlineWidth, outlineHeight) / 2);
@@ -115,7 +133,7 @@ class TemplateOutlinePainter extends CustomPainter {
     }
 
     final holePaint = Paint()
-      ..color = isDark ? Colors.redAccent.shade100 : Colors.red
+      ..color = (isDark ? Colors.redAccent.shade100 : Colors.red).withValues(alpha: drawingMode ? 0.3 : 1.0)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     final selectedPaint = Paint()
@@ -124,13 +142,13 @@ class TemplateOutlinePainter extends CustomPainter {
       ..strokeWidth = 3;
     final selectedFill = Paint()..color = Colors.lightBlue.withValues(alpha: 0.35);
     // Selected hole last so it sits on top of any overlapping neighbour.
-    final ordered = [...holes.where((h) => !h.selected), ...holes.where((h) => h.selected)];
+    final ordered = drawingMode ? holes : [...holes.where((h) => !h.selected), ...holes.where((h) => h.selected)];
     for (final hole in ordered) {
-      final paint = hole.selected ? selectedPaint : holePaint;
+      final paint = hole.selected && !drawingMode ? selectedPaint : holePaint;
       if (hole.shape == TemplateMakerHoleShape.round) {
         final center = toPx(hole.center);
         final radiusPx = hole.diameter / 2 * scale;
-        if (hole.selected) canvas.drawCircle(center, radiusPx, selectedFill);
+        if (hole.selected && !drawingMode) canvas.drawCircle(center, radiusPx, selectedFill);
         canvas.drawCircle(center, radiusPx, paint);
         _drawLabel(canvas, '\u2300${hole.diameter.toStringAsFixed(1)}', center + Offset(radiusPx + 4, -radiusPx - 4),
             bold: hole.selected);
@@ -142,7 +160,7 @@ class TemplateOutlinePainter extends CustomPainter {
           closed: true,
         ).transformed(delta: hole.center, rotationDeg: hole.rotationDeg);
         final path = Path()..addPolygon(outline.toPoints().map(toPx).toList(), true);
-        if (hole.selected) canvas.drawPath(path, selectedFill);
+        if (hole.selected && !drawingMode) canvas.drawPath(path, selectedFill);
         canvas.drawPath(path, paint);
         final center = toPx(hole.center);
         _drawLabel(canvas, '${hole.slotLength.toStringAsFixed(1)}x${hole.slotWidth.toStringAsFixed(1)}', center + const Offset(6, -6),
@@ -150,7 +168,29 @@ class TemplateOutlinePainter extends CustomPainter {
       }
     }
 
+    if (drawingMode) _paintNotes(canvas, toPx, scale);
     _paintMeasure(canvas, toPx);
+  }
+
+  void _paintNotes(Canvas canvas, Offset Function(Vec2) toPx, double scale, {bool ghost = false}) {
+    for (final n in notes) {
+      final selected = !ghost && n.id == selectedNoteId;
+      final color = selected ? Colors.lightBlue : noteColor(isDark: isDark).withValues(alpha: ghost ? 0.35 : 1.0);
+      final paint = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = selected ? 3 : 1.5;
+      switch (n.type) {
+        case AnnotationType.text:
+          paintNoteText(canvas, PlacedText(n.text, Vec2(n.x, n.y), n.height, n.rotationDeg), toPx(Vec2(n.x, n.y)), scale, color);
+        case AnnotationType.line:
+          canvas.drawLine(toPx(Vec2(n.x, n.y)), toPx(Vec2(n.x2, n.y2)), paint);
+        case AnnotationType.rect:
+          canvas.drawRect(Rect.fromPoints(toPx(Vec2(n.x, n.y)), toPx(Vec2(n.x + n.width, n.y + n.height))), paint);
+        case AnnotationType.circle:
+          canvas.drawCircle(toPx(Vec2(n.x, n.y)), n.radius * scale, paint);
+      }
+    }
   }
 
   void _paintMeasure(Canvas canvas, Offset Function(Vec2) toPx) {
@@ -221,7 +261,10 @@ class TemplateOutlinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant TemplateOutlinePainter oldDelegate) {
-    return oldDelegate.measureStart != measureStart ||
+    return oldDelegate.drawingMode != drawingMode ||
+        oldDelegate.selectedNoteId != selectedNoteId ||
+        oldDelegate.ghostNotes != ghostNotes ||
+        oldDelegate.measureStart != measureStart ||
         oldDelegate.measureEnd != measureEnd ||
         oldDelegate.measureHover != measureHover ||
         oldDelegate.viewRectMm != viewRectMm ||

@@ -2,12 +2,14 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../geometry/placed_annotations.dart';
 import '../geometry/placed_entities.dart';
 import '../geometry/tessellate.dart';
 import '../models/box_project.dart';
 import '../models/dxf_entity.dart';
 import '../models/vec2.dart';
 import 'design_controller.dart';
+import 'note_paint.dart';
 
 /// Paints a [BoxProject] at [pixelsPerMm] scale. The canvas itself uses
 /// screen (Y-down) pixels, so every mm-space point is flipped in Y before
@@ -33,7 +35,17 @@ class DesignPainter extends CustomPainter {
     final boxHeightMm = project.boxHeight;
 
     _drawGrid(canvas, project, boxHeightMm);
-    _drawEntities(canvas, project.boxOutline, boxHeightMm, color: _outlineColor, width: 2);
+    _drawEntities(canvas, project.sheetOutline, boxHeightMm, color: _outlineColor, width: 2);
+    if (project.dualLayer) {
+      final boxes = project.plateBoxes;
+      for (var i = 0; i < boxes.length; i++) {
+        final label = TextPainter(
+          text: TextSpan(text: 'Layer ${i + 1}', style: TextStyle(color: _outlineColor.withValues(alpha: 0.6), fontSize: 11, fontWeight: FontWeight.bold)),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        label.paint(canvas, _toPx(Vec2(boxes[i].minX, boxes[i].maxY), boxHeightMm) + const Offset(6, 6));
+      }
+    }
 
     for (final placed in project.placedTemplates) {
       final template = controller.library.byId(placed.templateId);
@@ -42,6 +54,13 @@ class DesignPainter extends CustomPainter {
       final selected = controller.selectedId == placed.id;
       _drawEntities(canvas, entities, boxHeightMm, color: selected ? _selectedColor : _templateColor, width: selected ? 1.6 : 1.0);
       _drawNameLabel(canvas, template.name, entitiesBoundingBox(entities), boxHeightMm, selected: selected);
+      final notes = placedTemplateNotes(template, placed);
+      if (notes.shapes.isNotEmpty) {
+        _drawEntities(canvas, notes.shapes, boxHeightMm, color: noteColor(isDark: isDark), width: 1.0);
+      }
+      for (final t in notes.texts) {
+        paintNoteText(canvas, t, _toPx(t.anchor, boxHeightMm), pixelsPerMm, noteColor(isDark: isDark));
+      }
     }
 
     for (final hole in project.holes) {

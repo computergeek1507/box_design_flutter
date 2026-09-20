@@ -64,7 +64,7 @@ Vec2 snapPoint(Vec2 raw, DesignController controller, {double toleranceMm = 3.0}
     if (template == null) continue;
     considerEntities(placedTemplateEntities(template, placed));
   }
-  considerEntities(project.boxOutline);
+  considerEntities(project.sheetOutline);
 
   return best ?? raw;
 }

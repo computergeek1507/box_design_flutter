@@ -2,6 +2,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:box_design_flutter/models/annotation.dart';
+import 'package:box_design_flutter/models/controller_template.dart';
+import 'package:box_design_flutter/models/dxf_entity.dart';
 import 'package:box_design_flutter/models/vec2.dart';
 import 'package:box_design_flutter/template_maker/template_maker_controller.dart';
 
@@ -12,6 +15,7 @@ Future<ui.Image> _image(int w, int h) {
 }
 
 void main() {
+  _layerTests();
   _measureTests();
   _selectionTests();
   _imageOpsTests();
@@ -156,3 +160,64 @@ void _measureTests() {
     expect((c.measureMode, c.measureStart), (false, null));
   });
 }
+
+void _layerTests() {
+  test('two-layer plates: layer 2 starts as a copy, edits stay per layer, and it round-trips', () {
+    final c = TemplateMakerController()
+      ..setOutlineWidth(100)
+      ..setOutlineHeight(50);
+    c.holes.add(TemplateMakerHole(id: 'h1', x: 10, y: 10));
+    c.setDualLayer(true);
+    expect(c.dualLayer, isTrue);
+
+    c.selectLayer(TemplateMakerLayer.layer2);
+    expect((c.outlineWidth, c.holes.length), (100.0, 1));
+    c.setOutlineWidth(60);
+    c.addHole();
+    c.addHole();
+    expect(c.holes.length, 3);
+    expect(c.holes.map((h) => h.id).toSet().length, 3);
+
+    c.selectLayer(TemplateMakerLayer.layer1);
+    expect((c.outlineWidth, c.holes.length), (100.0, 1));
+
+    final t = c.toTemplate();
+    expect(t.layer2Entities, isNotNull);
+    expect(t.boundingBox.width, 100);
+    expect(entitiesBoundingBoxWidth(t.layer2Entities!), 60);
+
+    final back = TemplateMakerController()..loadFromTemplate(t);
+    expect(back.dualLayer, isTrue);
+    expect((back.outlineWidth, back.holes.length), (100.0, 1));
+    back.selectLayer(TemplateMakerLayer.layer2);
+    expect((back.outlineWidth, back.holes.length), (60.0, 3));
+    // Saving while layer 2 is on screen still puts each plate in its own slot.
+    expect(back.toTemplate().boundingBox.width, 100);
+
+    c.setDualLayer(false);
+    expect(c.toTemplate().layer2Entities, isNull);
+  });
+
+  test('drawing layer notes are saved with the template and reload', () {
+    final c = TemplateMakerController()..setCategory(TemplateCategory.controller);
+    c.selectLayer(TemplateMakerLayer.drawing);
+    expect(c.layer, TemplateMakerLayer.drawing);
+    c.addNote(AnnotationType.text);
+    final line = c.addNote(AnnotationType.line);
+    c.updateNote(line.id, x: 1, y: 2, x2: 30, y2: 2);
+    c.moveNoteBy(line.id, 5, 5);
+    final t = c.toTemplate();
+    expect(t.annotations.length, 2);
+    expect((t.annotations[1].x, t.annotations[1].y, t.annotations[1].x2), (6.0, 7.0, 35.0));
+
+    final back = TemplateMakerController()..loadFromTemplate(t);
+    expect(back.notes.map((n) => n.type), [AnnotationType.text, AnnotationType.line]);
+
+    // Box templates have no drawing layer tab.
+    final box = TemplateMakerController();
+    box.selectLayer(TemplateMakerLayer.drawing);
+    expect(box.layer, TemplateMakerLayer.layer1);
+  });
+}
+
+double entitiesBoundingBoxWidth(List<DxfEntity> e) => e.map((x) => x.boundingBox).reduce((a, b) => BoundingBox.merge(a, b)!).width;

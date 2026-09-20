@@ -100,9 +100,29 @@ class _LeftPaletteState extends State<LeftPalette> {
     );
   }
 
+  Future<void> _applyBox(ControllerTemplate box) async {
+    final lost = widget.controller.itemsLostByApplying(box.id);
+    if (lost > 0) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Remove layer 2?'),
+          content: Text('${box.name} has one layer. Layer 2 has $lost item(s) on it, and switching deletes layer 2 and everything on it.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Switch')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    widget.controller.applyBoxTemplate(box.id);
+  }
+
   Widget _boxSection() {
     final boxes = widget.library.byCategory(TemplateCategory.box)..sort((a, b) => _naturalCompare(a.name, b.name));
-    final activeId = widget.controller.project.boxTemplateId;
+    final project = widget.controller.project;
+    final activeId = project.boxTemplateId;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -135,7 +155,7 @@ class _LeftPaletteState extends State<LeftPalette> {
                     ],
                   )
                 : null,
-            onTap: () => widget.controller.applyBoxTemplate(box.id),
+            onTap: () => _applyBox(box),
           ),
         if (boxes.isEmpty)
           const Padding(

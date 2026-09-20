@@ -300,7 +300,9 @@ class _TopToolbarState extends State<TopToolbar> {
                 Text(
                   box == null
                       ? 'No box selected'
-                      : '${box.name} — ${controller.project.boxWidth.toStringAsFixed(0)}×${controller.project.boxHeight.toStringAsFixed(0)}mm',
+                      : controller.project.dualLayer
+                          ? '${box.name} + layer 2 — ${controller.project.boxWidth.toStringAsFixed(0)}×${controller.project.boxHeight.toStringAsFixed(0)}mm'
+                          : '${box.name} — ${controller.project.boxWidth.toStringAsFixed(0)}×${controller.project.boxHeight.toStringAsFixed(0)}mm',
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
                 const VerticalDivider(width: 1),

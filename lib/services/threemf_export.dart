@@ -24,28 +24,38 @@ const String _relsXml = '''
 
 String _f(double v) => v.toStringAsFixed(4);
 
-String meshTo3mfModelXml(Mesh mesh) {
+String meshTo3mfModelXml(Mesh mesh) => meshesTo3mfModelXml([mesh]);
+
+/// One 3MF `<object>` (and build item) per mesh, named "Layer N" when there
+/// is more than one, so a slicer shows a two-layer plate as two objects.
+String meshesTo3mfModelXml(List<Mesh> meshes) {
   final buffer = StringBuffer();
   buffer.writeln('<?xml version="1.0" encoding="UTF-8"?>');
   buffer.writeln('<model unit="millimeter" xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02">');
   buffer.writeln('  <resources>');
-  buffer.writeln('    <object id="1" type="model">');
-  buffer.writeln('      <mesh>');
-  buffer.writeln('        <vertices>');
-  for (final v in mesh.vertices) {
-    buffer.writeln('          <vertex x="${_f(v.x)}" y="${_f(v.y)}" z="${_f(v.z)}"/>');
+  for (var i = 0; i < meshes.length; i++) {
+    final mesh = meshes[i];
+    final name = meshes.length > 1 ? ' name="Layer ${i + 1}"' : '';
+    buffer.writeln('    <object id="${i + 1}"$name type="model">');
+    buffer.writeln('      <mesh>');
+    buffer.writeln('        <vertices>');
+    for (final v in mesh.vertices) {
+      buffer.writeln('          <vertex x="${_f(v.x)}" y="${_f(v.y)}" z="${_f(v.z)}"/>');
+    }
+    buffer.writeln('        </vertices>');
+    buffer.writeln('        <triangles>');
+    for (final t in mesh.triangles) {
+      buffer.writeln('          <triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>');
+    }
+    buffer.writeln('        </triangles>');
+    buffer.writeln('      </mesh>');
+    buffer.writeln('    </object>');
   }
-  buffer.writeln('        </vertices>');
-  buffer.writeln('        <triangles>');
-  for (final t in mesh.triangles) {
-    buffer.writeln('          <triangle v1="${t[0]}" v2="${t[1]}" v3="${t[2]}"/>');
-  }
-  buffer.writeln('        </triangles>');
-  buffer.writeln('      </mesh>');
-  buffer.writeln('    </object>');
   buffer.writeln('  </resources>');
   buffer.writeln('  <build>');
-  buffer.writeln('    <item objectid="1"/>');
+  for (var i = 0; i < meshes.length; i++) {
+    buffer.writeln('    <item objectid="${i + 1}"/>');
+  }
   buffer.writeln('  </build>');
   buffer.writeln('</model>');
   return buffer.toString();
@@ -59,7 +69,7 @@ Uint8List exportProjectAs3mfBytes(
   double standoffHeight = 3,
   double standoffWallThickness = 2,
 }) {
-  final mesh = buildPlateMesh(
+  final meshes = buildPlateMeshes(
     project,
     library,
     thicknessMm: thicknessMm,
@@ -71,7 +81,7 @@ Uint8List exportProjectAs3mfBytes(
   final archive = Archive()
     ..addFile(ArchiveFile.string('[Content_Types].xml', _contentTypesXml))
     ..addFile(ArchiveFile.string('_rels/.rels', _relsXml))
-    ..addFile(ArchiveFile.string('3D/3dmodel.model', meshTo3mfModelXml(mesh)));
+    ..addFile(ArchiveFile.string('3D/3dmodel.model', meshesTo3mfModelXml(meshes)));
 
   return Uint8List.fromList(ZipEncoder().encode(archive));
 }

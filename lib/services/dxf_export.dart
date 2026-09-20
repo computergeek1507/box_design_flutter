@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import '../dxf/dxf_writer.dart';
+import '../geometry/placed_annotations.dart';
 import '../geometry/placed_entities.dart';
+import '../models/annotation.dart';
 import '../models/box_project.dart';
 import '../models/dxf_entity.dart';
 import '../models/hole.dart';
@@ -12,7 +14,7 @@ import 'template_library.dart';
 /// the box outline, every placed template's geometry (transformed by its
 /// position/rotation), and every hole's cut geometry.
 List<DxfEntity> assembleProjectEntities(BoxProject project, TemplateLibrary library) {
-  final entities = <DxfEntity>[...project.boxOutline];
+  final entities = <DxfEntity>[...project.sheetOutline];
 
   for (final placed in project.placedTemplates) {
     final template = library.byId(placed.templateId);
@@ -27,6 +29,20 @@ List<DxfEntity> assembleProjectEntities(BoxProject project, TemplateLibrary libr
   return entities;
 }
 
+/// Every placed template's drawing-layer notes, in absolute coordinates.
+PlacedNotes assembleProjectNotes(BoxProject project, TemplateLibrary library) {
+  final shapes = <DxfEntity>[];
+  final texts = <PlacedText>[];
+  for (final placed in project.placedTemplates) {
+    final template = library.byId(placed.templateId);
+    if (template == null) continue;
+    final notes = placedTemplateNotes(template, placed);
+    shapes.addAll(notes.shapes);
+    texts.addAll(notes.texts);
+  }
+  return PlacedNotes(shapes, texts);
+}
+
 /// Same coverage as [assembleProjectEntities], but grouped into named DXF
 /// layers instead of one flat list: the box outline and every placed
 /// template's non-hole footprint geometry each get their own layer, while
@@ -39,8 +55,11 @@ Map<String, List<DxfEntity>> assembleProjectLayers(BoxProject project, TemplateL
   final layers = <String, List<DxfEntity>>{};
   void add(String layer, DxfEntity entity) => layers.putIfAbsent(layer, () => []).add(entity);
 
-  for (final entity in project.boxOutline) {
-    add('Outline', entity);
+  final outlines = project.plateOutlines;
+  for (var i = 0; i < outlines.length; i++) {
+    for (final entity in outlines[i]) {
+      add(i == 0 ? 'Outline' : 'Outline_Layer${i + 1}', entity);
+    }
   }
 
   for (final placed in project.placedTemplates) {
@@ -89,5 +108,8 @@ String _mmLabel(double mm) {
 
 Uint8List exportProjectAsDxfBytes(BoxProject project, TemplateLibrary library) {
   final layers = assembleProjectLayers(project, library);
-  return Uint8List.fromList(utf8.encode(writeDxfLayered(layers)));
+  final notes = assembleProjectNotes(project, library);
+  if (notes.shapes.isNotEmpty) layers['Notes'] = [...notes.shapes];
+  final texts = [for (final t in notes.texts) DxfTextItem(t.text, t.anchor.x, t.anchor.y, t.height, t.rotationDeg)];
+  return Uint8List.fromList(utf8.encode(writeDxfLayered(layers, texts: texts)));
 }

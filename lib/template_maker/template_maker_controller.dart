@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 
 import '../design/snap.dart';
+import '../models/annotation.dart';
 import '../models/controller_template.dart';
 import '../models/dxf_entity.dart';
 import '../models/vec2.dart';
@@ -44,6 +45,79 @@ class TemplateMakerHole {
     this.slotWidth = 4,
     this.rotationDeg = 0,
   });
+}
+
+/// Which layer of the template the maker is showing/editing: the first
+/// plate, the second plate of a two-layer box, or the drawing layer (notes).
+enum TemplateMakerLayer { layer1, layer2, drawing }
+
+/// One note on the drawing layer being edited; see [Annotation] for what
+/// each field means per [type].
+class TemplateMakerNote {
+  final String id;
+  final AnnotationType type;
+  String text;
+  double x;
+  double y;
+  double x2;
+  double y2;
+  double width;
+  double height;
+  double radius;
+  double rotationDeg;
+
+  TemplateMakerNote({
+    required this.id,
+    required this.type,
+    this.text = '',
+    this.x = 0,
+    this.y = 0,
+    this.x2 = 0,
+    this.y2 = 0,
+    this.width = 10,
+    this.height = 5,
+    this.radius = 5,
+    this.rotationDeg = 0,
+  });
+
+  factory TemplateMakerNote.fromAnnotation(String id, Annotation a) => TemplateMakerNote(
+        id: id,
+        type: a.type,
+        text: a.text,
+        x: a.x,
+        y: a.y,
+        x2: a.x2,
+        y2: a.y2,
+        width: a.width,
+        height: a.height,
+        radius: a.radius,
+        rotationDeg: a.rotationDeg,
+      );
+
+  Annotation toAnnotation() => Annotation(
+        type: type,
+        text: text,
+        x: x,
+        y: y,
+        x2: x2,
+        y2: y2,
+        width: width,
+        height: height,
+        radius: radius,
+        rotationDeg: rotationDeg,
+      );
+}
+
+/// One plate's worth of outline settings and holes, used to park the plate
+/// that isn't currently being edited.
+class _Plate {
+  final double outlineWidth;
+  final double outlineHeight;
+  final TemplateMakerCornerStyle cornerStyle;
+  final double cornerSize;
+  final List<TemplateMakerHole> holes;
+
+  _Plate(this.outlineWidth, this.outlineHeight, this.cornerStyle, this.cornerSize, this.holes);
 }
 
 /// A [length] x [width] rectangle centered on the origin with its long axis
@@ -133,6 +207,19 @@ class TemplateMakerController extends ChangeNotifier {
 
   Uint8List? _refPixels;
 
+  /// Two-layer plate support: the fields above always describe the plate
+  /// being edited; the other plate is parked in [_stored]. [layer] is the
+  /// tab being shown (one at a time).
+  bool dualLayer = false;
+  TemplateMakerLayer layer = TemplateMakerLayer.layer1;
+  _Plate? _stored;
+  bool _fieldsAreLayer2 = false;
+
+  /// The drawing layer.
+  final List<TemplateMakerNote> notes = [];
+  String? selectedNoteId;
+  int _nextNoteSeq = 1;
+
   /// Click-to-measure state: with [measureMode] on, the first click sets
   /// [measureStart], the second [measureEnd], and a third starts over.
   bool measureMode = false;
@@ -160,7 +247,7 @@ class TemplateMakerController extends ChangeNotifier {
   /// center, a point on the outline (edges, corners, fillet centers) or a
   /// corner of the reference image, within [toleranceMm].
   Vec2 snapMeasurePoint(Vec2 raw, double toleranceMm) {
-    final entities = toTemplate().entities;
+    final entities = _plateEntities(_snapshotFields());
     return snapToGeometry(
       raw,
       points: [
@@ -201,6 +288,11 @@ class TemplateMakerController extends ChangeNotifier {
 
   void setCategory(TemplateCategory value) {
     category = value;
+    if (value != TemplateCategory.box) {
+      _setDualLayer(false);
+    } else if (layer == TemplateMakerLayer.drawing) {
+      layer = TemplateMakerLayer.layer1;
+    }
     notifyListeners();
   }
 
@@ -299,6 +391,37 @@ class TemplateMakerController extends ChangeNotifier {
   void removeHole(String holeId) {
     holes.removeWhere((h) => h.id == holeId);
     if (selectedHoleId == holeId) selectedHoleId = null;
+    notifyListeners();
+  }
+
+  /// How far (mm) a duplicate is nudged so it doesn't hide under the original.
+  static const double duplicateOffsetMm = 5;
+
+  /// Duplicates [holeId] on the current layer, nudged by [duplicateOffsetMm],
+  /// and selects the copy (returned; null if [holeId] isn't found).
+  TemplateMakerHole? duplicateHole(String holeId) {
+    final i = holes.indexWhere((h) => h.id == holeId);
+    if (i < 0) return null;
+    final copy = _cloneHole(holes[i])
+      ..x += duplicateOffsetMm
+      ..y += duplicateOffsetMm;
+    holes.insert(i + 1, copy);
+    selectedHoleId = copy.id;
+    notifyListeners();
+    return copy;
+  }
+
+  /// Whether a hole/slot on the plate being edited can be copied to the other
+  /// layer (a two-layer plate showing one of its two layers).
+  bool get canCopyToOtherLayer => dualLayer && layer != TemplateMakerLayer.drawing && _stored != null;
+
+  /// Copies [holeId] (same position and size) onto the other layer's plate.
+  /// The current layer keeps its hole and the selection.
+  void copyHoleToOtherLayer(String holeId) {
+    if (!canCopyToOtherLayer) return;
+    final hole = holes.where((h) => h.id == holeId).firstOrNull;
+    if (hole == null) return;
+    _stored!.holes.add(_cloneHole(hole));
     notifyListeners();
   }
 
@@ -495,7 +618,176 @@ class TemplateMakerController extends ChangeNotifier {
     return added;
   }
 
+  _Plate _snapshotFields() => _Plate(outlineWidth, outlineHeight, cornerStyle, cornerSize, holes);
+
+  TemplateMakerHole _cloneHole(TemplateMakerHole h) => TemplateMakerHole(
+        id: 'hole${_nextHoleSeq++}',
+        x: h.x,
+        y: h.y,
+        shape: h.shape,
+        diameter: h.diameter,
+        slotLength: h.slotLength,
+        slotWidth: h.slotWidth,
+        rotationDeg: h.rotationDeg,
+      );
+
+  void _swapPlateFields() {
+    final other = _stored!;
+    final mine = _Plate(outlineWidth, outlineHeight, cornerStyle, cornerSize, List.of(holes));
+    outlineWidth = other.outlineWidth;
+    outlineHeight = other.outlineHeight;
+    cornerStyle = other.cornerStyle;
+    cornerSize = other.cornerSize;
+    holes
+      ..clear()
+      ..addAll(other.holes);
+    _stored = mine;
+    _fieldsAreLayer2 = !_fieldsAreLayer2;
+    selectedHoleId = null;
+  }
+
+  void _setDualLayer(bool on) {
+    if (on == dualLayer) return;
+    if (on) {
+      final mine = _snapshotFields();
+      _stored = _Plate(mine.outlineWidth, mine.outlineHeight, mine.cornerStyle, mine.cornerSize, [for (final h in holes) _cloneHole(h)]);
+      dualLayer = true;
+      _fieldsAreLayer2 = false;
+    } else {
+      if (_fieldsAreLayer2) _swapPlateFields();
+      _stored = null;
+      dualLayer = false;
+      if (layer == TemplateMakerLayer.layer2) layer = TemplateMakerLayer.layer1;
+    }
+  }
+
+  /// Turns the two-layer plate on (layer 2 starts as a copy of layer 1) or
+  /// off (layer 2 is discarded).
+  void setDualLayer(bool on) {
+    if (category != TemplateCategory.box && on) return;
+    _setDualLayer(on);
+    notifyListeners();
+  }
+
+  /// Shows one layer at a time. The fields always hold the plate for the
+  /// layer being viewed; the drawing layer sits over plate 1's coordinates.
+  void selectLayer(TemplateMakerLayer value) {
+    if (value == TemplateMakerLayer.layer2 && !dualLayer) return;
+    if (value == TemplateMakerLayer.drawing && category == TemplateCategory.box) return;
+    final wantLayer2 = value == TemplateMakerLayer.layer2;
+    if (dualLayer && wantLayer2 != _fieldsAreLayer2) _swapPlateFields();
+    layer = value;
+    selectedHoleId = null;
+    selectedNoteId = null;
+    notifyListeners();
+  }
+
+  TemplateMakerNote addNote(AnnotationType type) {
+    final cx = outlineWidth / 2, cy = outlineHeight / 2;
+    final note = TemplateMakerNote(
+      id: 'note${_nextNoteSeq++}',
+      type: type,
+      text: type == AnnotationType.text ? 'Note' : '',
+      x: type == AnnotationType.line ? cx - 10 : cx,
+      y: cy,
+      x2: cx + 10,
+      y2: cy,
+      width: 20,
+      height: type == AnnotationType.text ? 5 : 10,
+      radius: 5,
+    );
+    notes.add(note);
+    selectedNoteId = note.id;
+    notifyListeners();
+    return note;
+  }
+
+  /// Duplicates a drawing-layer note, nudged by [duplicateOffsetMm], and
+  /// selects the copy (returned; null if [noteId] isn't found).
+  TemplateMakerNote? duplicateNote(String noteId) {
+    final i = notes.indexWhere((n) => n.id == noteId);
+    if (i < 0) return null;
+    final n = notes[i];
+    final copy = TemplateMakerNote(
+      id: 'note${_nextNoteSeq++}',
+      type: n.type,
+      text: n.text,
+      x: n.x + duplicateOffsetMm,
+      y: n.y + duplicateOffsetMm,
+      x2: n.x2 + duplicateOffsetMm,
+      y2: n.y2 + duplicateOffsetMm,
+      width: n.width,
+      height: n.height,
+      radius: n.radius,
+      rotationDeg: n.rotationDeg,
+    );
+    notes.insert(i + 1, copy);
+    selectedNoteId = copy.id;
+    notifyListeners();
+    return copy;
+  }
+
+  void removeNote(String noteId) {
+    notes.removeWhere((n) => n.id == noteId);
+    if (selectedNoteId == noteId) selectedNoteId = null;
+    notifyListeners();
+  }
+
+  void selectNote(String? noteId) {
+    if (selectedNoteId == noteId) return;
+    selectedNoteId = noteId;
+    notifyListeners();
+  }
+
+  void updateNote(
+    String noteId, {
+    String? text,
+    double? x,
+    double? y,
+    double? x2,
+    double? y2,
+    double? width,
+    double? height,
+    double? radius,
+    double? rotationDeg,
+  }) {
+    for (final n in notes) {
+      if (n.id != noteId) continue;
+      if (text != null) n.text = text;
+      if (x != null) n.x = x;
+      if (y != null) n.y = y;
+      if (x2 != null) n.x2 = x2;
+      if (y2 != null) n.y2 = y2;
+      if (width != null && width > 0) n.width = width;
+      if (height != null && height > 0) n.height = height;
+      if (radius != null && radius > 0) n.radius = radius;
+      if (rotationDeg != null) n.rotationDeg = rotationDeg;
+      break;
+    }
+    notifyListeners();
+  }
+
+  /// Moves a whole note by ([dx], [dy]) mm (a line moves both ends).
+  void moveNoteBy(String noteId, double dx, double dy) {
+    for (final n in notes) {
+      if (n.id != noteId) continue;
+      n.x += dx;
+      n.y += dy;
+      n.x2 += dx;
+      n.y2 += dy;
+      break;
+    }
+    notifyListeners();
+  }
+
   void newTemplate() {
+    _stored = null;
+    dualLayer = false;
+    _fieldsAreLayer2 = false;
+    layer = TemplateMakerLayer.layer1;
+    notes.clear();
+    selectedNoteId = null;
+    _nextNoteSeq = 1;
     refImage?.dispose();
     refImage = null;
     _refPixels = null;
@@ -519,40 +811,65 @@ class TemplateMakerController extends ChangeNotifier {
   /// exactly the shape [ControllerTemplate.toJson] (and the rest of the
   /// app, e.g. mesh export's own-hole detection) expect.
   ControllerTemplate toTemplate() {
-    final size = cornerSize <= 0 ? 0.0 : math.min(cornerSize, math.min(outlineWidth, outlineHeight) / 2);
+    final current = _snapshotFields();
+    var layer1 = _plateEntities(current);
+    List<DxfEntity>? layer2;
+    final other = _stored;
+    if (dualLayer && other != null) {
+      final otherEntities = _plateEntities(other);
+      if (_fieldsAreLayer2) {
+        layer2 = layer1;
+        layer1 = otherEntities;
+      } else {
+        layer2 = otherEntities;
+      }
+    }
+    return ControllerTemplate(
+      id: id,
+      name: name,
+      entities: layer1,
+      source: TemplateSource.imported,
+      category: category,
+      annotations: [for (final n in notes) n.toAnnotation()],
+      layer2Entities: layer2,
+    );
+  }
+
+  List<DxfEntity> _plateEntities(_Plate plate) {
+    final size = plate.cornerSize <= 0 ? 0.0 : math.min(plate.cornerSize, math.min(plate.outlineWidth, plate.outlineHeight) / 2);
     final List<PolyVertex> vertices;
     if (size <= 0) {
       vertices = [
         const PolyVertex(Vec2(0, 0)),
-        PolyVertex(Vec2(outlineWidth, 0)),
-        PolyVertex(Vec2(outlineWidth, outlineHeight)),
-        PolyVertex(Vec2(0, outlineHeight)),
+        PolyVertex(Vec2(plate.outlineWidth, 0)),
+        PolyVertex(Vec2(plate.outlineWidth, plate.outlineHeight)),
+        PolyVertex(Vec2(0, plate.outlineHeight)),
       ];
     } else {
-      switch (cornerStyle) {
+      switch (plate.cornerStyle) {
         case TemplateMakerCornerStyle.cornerCut:
-          vertices = notchedRectVertices(outlineWidth, outlineHeight, size);
+          vertices = notchedRectVertices(plate.outlineWidth, plate.outlineHeight, size);
           break;
         case TemplateMakerCornerStyle.chamfer:
-          vertices = chamferedRectVertices(outlineWidth, outlineHeight, size);
+          vertices = chamferedRectVertices(plate.outlineWidth, plate.outlineHeight, size);
           break;
         case TemplateMakerCornerStyle.fillet:
           vertices = [
             PolyVertex(Vec2(size, 0)),
-            PolyVertex(Vec2(outlineWidth - size, 0), bulge: _bulge90),
-            PolyVertex(Vec2(outlineWidth, size)),
-            PolyVertex(Vec2(outlineWidth, outlineHeight - size), bulge: _bulge90),
-            PolyVertex(Vec2(outlineWidth - size, outlineHeight)),
-            PolyVertex(Vec2(size, outlineHeight), bulge: _bulge90),
-            PolyVertex(Vec2(0, outlineHeight - size)),
+            PolyVertex(Vec2(plate.outlineWidth - size, 0), bulge: _bulge90),
+            PolyVertex(Vec2(plate.outlineWidth, size)),
+            PolyVertex(Vec2(plate.outlineWidth, plate.outlineHeight - size), bulge: _bulge90),
+            PolyVertex(Vec2(plate.outlineWidth - size, plate.outlineHeight)),
+            PolyVertex(Vec2(size, plate.outlineHeight), bulge: _bulge90),
+            PolyVertex(Vec2(0, plate.outlineHeight - size)),
             PolyVertex(Vec2(0, size), bulge: _bulge90),
           ];
           break;
       }
     }
-    final entities = <DxfEntity>[
+    return <DxfEntity>[
       DxfPolyline(vertices, closed: true),
-      for (final h in holes)
+      for (final h in plate.holes)
         if (h.shape == TemplateMakerHoleShape.round)
           DxfCircle(Vec2(h.x, h.y), h.diameter / 2)
         else
@@ -563,13 +880,6 @@ class TemplateMakerController extends ChangeNotifier {
             closed: true,
           ).transformed(delta: Vec2(h.x, h.y), rotationDeg: h.rotationDeg),
     ];
-    return ControllerTemplate(
-      id: id,
-      name: name,
-      entities: entities,
-      source: TemplateSource.imported,
-      category: category,
-    );
   }
 
   /// True for an entity this tool would itself only ever produce as a hole:
@@ -618,10 +928,37 @@ class TemplateMakerController extends ChangeNotifier {
     id = template.id;
     name = template.name;
     category = template.category;
+    holes.clear();
+    selectedHoleId = null;
+    _nextHoleSeq = 1;
+    _stored = null;
+    dualLayer = false;
+    _fieldsAreLayer2 = false;
+    layer = TemplateMakerLayer.layer1;
 
+    // Layer 2 first (parked afterwards), so layer 1 ends up in the fields.
+    final layer2 = template.layer2Entities;
+    if (layer2 != null && layer2.isNotEmpty) {
+      _loadPlateFields(layer2);
+      _stored = _snapshotFields();
+      _stored = _Plate(_stored!.outlineWidth, _stored!.outlineHeight, _stored!.cornerStyle, _stored!.cornerSize, List.of(holes));
+      dualLayer = true;
+    }
+    _loadPlateFields(template.entities);
+
+    notes.clear();
+    selectedNoteId = null;
+    _nextNoteSeq = 1;
+    for (final a in template.annotations) {
+      notes.add(TemplateMakerNote.fromAnnotation('note${_nextNoteSeq++}', a));
+    }
+    notifyListeners();
+  }
+
+  void _loadPlateFields(List<DxfEntity> entities) {
     BoundingBox? largest;
     var largestArea = 0.0;
-    for (final e in template.entities) {
+    for (final e in entities) {
       final b = e.boundingBox;
       if (b.width * b.height > largestArea) {
         largestArea = b.width * b.height;
@@ -630,11 +967,11 @@ class TemplateMakerController extends ChangeNotifier {
     }
     bool isHole(DxfEntity e) => _looksLikeHole(e) || (largest != null && _isInnerRect(e, largest));
 
-    final outlineEntities = template.entities.where((e) => !isHole(e)).toList();
+    final outlineEntities = entities.where((e) => !isHole(e)).toList();
     // If literally everything looked like a hole (shouldn't happen for a
     // real template), fall back to treating every entity as outline
     // material instead of showing an empty 0x0 outline.
-    final outlineSource = outlineEntities.isEmpty ? template.entities : outlineEntities;
+    final outlineSource = outlineEntities.isEmpty ? entities : outlineEntities;
 
     BoundingBox? outlineBox;
     for (final e in outlineSource) {
@@ -668,11 +1005,9 @@ class TemplateMakerController extends ChangeNotifier {
     }
 
     holes.clear();
-    selectedHoleId = null;
-    _nextHoleSeq = 1;
     // In the fallback case above (nothing looked like a hole) there's
     // nothing left to extract as a hole either.
-    final holeSource = outlineEntities.isEmpty ? const <DxfEntity>[] : template.entities.where(isHole);
+    final holeSource = outlineEntities.isEmpty ? const <DxfEntity>[] : entities.where(isHole);
     for (final e in holeSource) {
       if (e is DxfCircle) {
         holes.add(TemplateMakerHole(
@@ -712,6 +1047,5 @@ class TemplateMakerController extends ChangeNotifier {
         ));
       }
     }
-    notifyListeners();
   }
 }

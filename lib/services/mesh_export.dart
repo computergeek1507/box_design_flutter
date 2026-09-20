@@ -1,5 +1,6 @@
 import '../geometry/mesh.dart';
 import '../geometry/placed_entities.dart';
+import '../geometry/tessellate.dart';
 import '../models/box_project.dart';
 import '../models/controller_template.dart';
 import '../models/dxf_entity.dart';
@@ -117,6 +118,69 @@ List<({Vec2 center, double radius})> _controllerReceiverMountingHoles(BoxProject
 /// board sits proud of the plate on printed standoffs instead of flush
 /// against it.
 Mesh buildPlateMesh(
+  BoxProject project,
+  TemplateLibrary library, {
+  required double thicknessMm,
+  bool addStandoffs = false,
+  double standoffHeight = 3,
+  double standoffWallThickness = 2,
+}) {
+  return combineMeshes(buildPlateMeshes(
+    project,
+    library,
+    thicknessMm: thicknessMm,
+    addStandoffs: addStandoffs,
+    standoffHeight: standoffHeight,
+    standoffWallThickness: standoffWallThickness,
+  ));
+}
+
+/// One [Mesh] per plate: a single entry for an ordinary project, two (in the
+/// same side-by-side sheet coordinates as the canvas) for a two-layer one,
+/// each holding only the holes/templates that sit on its own plate.
+List<Mesh> buildPlateMeshes(
+  BoxProject project,
+  TemplateLibrary library, {
+  required double thicknessMm,
+  bool addStandoffs = false,
+  double standoffHeight = 3,
+  double standoffWallThickness = 2,
+}) {
+  Mesh single(BoxProject p) => _buildSinglePlateMesh(
+        p,
+        library,
+        thicknessMm: thicknessMm,
+        addStandoffs: addStandoffs,
+        standoffHeight: standoffHeight,
+        standoffWallThickness: standoffWallThickness,
+      );
+  if (!project.dualLayer) return [single(project)];
+
+  Vec2 center(BoundingBox b) => Vec2((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
+  final outlines = project.plateOutlines;
+  return [
+    for (var i = 0; i < outlines.length; i++)
+      single(project.copyWith(
+        boxOutline: outlines[i],
+        clearLayer2: true,
+        placedTemplates: [
+          for (final p in project.placedTemplates)
+            if (project.plateIndexForPoint(() {
+                  final t = library.byId(p.templateId);
+                  return t == null ? p.position : center(entitiesBoundingBox(placedTemplateEntities(t, p)));
+                }()) ==
+                i)
+              p,
+        ],
+        holes: [
+          for (final h in project.holes)
+            if (project.plateIndexForPoint(center(h.boundingBox)) == i) h,
+        ],
+      )),
+  ];
+}
+
+Mesh _buildSinglePlateMesh(
   BoxProject project,
   TemplateLibrary library, {
   required double thicknessMm,

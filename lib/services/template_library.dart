@@ -118,6 +118,8 @@ class TemplateLibrary extends ChangeNotifier {
       entities: template.entities,
       source: TemplateSource.userMade,
       category: template.category,
+      annotations: template.annotations,
+      layer2Entities: template.layer2Entities,
     );
     _templates.add(saved);
     notifyListeners();

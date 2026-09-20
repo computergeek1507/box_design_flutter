@@ -1,5 +1,16 @@
 import '../models/dxf_entity.dart';
 
+/// A single-line text note for [writeDxfLayered].
+class DxfTextItem {
+  final String text;
+  final double x;
+  final double y;
+  final double height;
+  final double rotationDeg;
+
+  const DxfTextItem(this.text, this.x, this.y, this.height, this.rotationDeg);
+}
+
 /// Writes a minimal, valid ASCII DXF R12 file: a HEADER section (just enough
 /// for CAD/CAM tools to recognize units) and an ENTITIES section. No
 /// TABLES/BLOCKS section is needed since entities default to layer "0",
@@ -13,8 +24,11 @@ String writeDxf(List<DxfEntity> entities) {
 /// section so CAD/CAM tools that expect layers to exist before they're
 /// referenced (rather than auto-creating them) still show them -- e.g. for
 /// assigning a different drill bit/tool per hole-size layer.
-String writeDxfLayered(Map<String, List<DxfEntity>> entitiesByLayer) {
+String writeDxfLayered(Map<String, List<DxfEntity>> entitiesByLayer, {List<DxfTextItem> texts = const [], String textLayer = 'Notes'}) {
   final buffer = StringBuffer();
+  if (texts.isNotEmpty && !entitiesByLayer.containsKey(textLayer)) {
+    entitiesByLayer = {...entitiesByLayer, textLayer: <DxfEntity>[]};
+  }
 
   void pair(int code, Object value) {
     buffer.writeln(code);
@@ -58,6 +72,16 @@ String writeDxfLayered(Map<String, List<DxfEntity>> entitiesByLayer) {
     for (final entity in value) {
       _writeEntity(pair, entity, layer);
     }
+  }
+  for (final t in texts) {
+    pair(0, 'TEXT');
+    pair(8, _sanitizeLayerName(textLayer));
+    pair(10, _fmt(t.x));
+    pair(20, _fmt(t.y));
+    pair(30, _fmt(0));
+    pair(40, _fmt(t.height));
+    pair(1, t.text);
+    pair(50, _fmt(t.rotationDeg));
   }
   pair(0, 'ENDSEC');
   pair(0, 'EOF');

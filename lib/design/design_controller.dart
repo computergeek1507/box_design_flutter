@@ -6,6 +6,7 @@ import '../geometry/placed_entities.dart';
 import '../geometry/tessellate.dart';
 import '../geometry/transform.dart';
 import '../models/box_project.dart';
+import '../models/dxf_entity.dart';
 import '../models/hole.dart';
 import '../models/hole_preset.dart';
 import '../models/placed_template.dart';
@@ -119,17 +120,103 @@ class DesignController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Applies [templateId] (a box-category template) as the enclosure
-  /// outline, normalizing its geometry so the bounding box's min corner
-  /// sits at (0, 0) — the coordinate frame everything else is placed in.
+  List<DxfEntity> _normalized(List<DxfEntity> entities) {
+    final b = entitiesBoundingBox(entities);
+    return placeEntities(entities, delta: Vec2(-b.minX, -b.minY));
+  }
+
+  /// Applies [templateId] (a box-category template) as the box, normalizing
+  /// its geometry so the bounding box's min corner sits at (0, 0) -- the
+  /// coordinate frame everything else is placed in. The template decides the
+  /// layer count: one with a second layer gives a two-layer project, any other
+  /// gives a one-layer project (dropping whatever sat on the old plate 2).
+  /// Items on a plate that changes size or moves come along with it.
   void applyBoxTemplate(String templateId) {
     final template = library.byId(templateId);
     if (template == null) return;
-    final box = template.boundingBox;
-    final normalized = placeEntities(template.entities, delta: Vec2(-box.minX, -box.minY));
-    project = project.copyWith(boxTemplateId: templateId, boxOutline: normalized);
+    final outline = _normalized(template.entities);
+    final layer2 = template.layer2Entities;
+    final BoxProject next;
+    if (layer2 != null && layer2.isNotEmpty) {
+      next = project.copyWith(
+        boxTemplateId: templateId,
+        boxOutline: outline,
+        layer2TemplateId: templateId,
+        layer2Outline: _normalized(layer2),
+      );
+    } else {
+      _dropPlate2Items();
+      next = project.copyWith(boxTemplateId: templateId, boxOutline: outline, clearLayer2: true);
+    }
+    _reflowInto(next);
     _clampIntoBox();
     notifyListeners();
+  }
+
+  /// Whether applying [templateId] would delete items sitting on plate 2
+  /// (it is a one-layer template and the project is currently two-layer).
+  int itemsLostByApplying(String templateId) {
+    final layer2 = library.byId(templateId)?.layer2Entities;
+    return layer2 != null && layer2.isNotEmpty ? 0 : itemsOnLayer2;
+  }
+
+  Vec2 _center(BoundingBox b) => Vec2((b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2);
+
+  /// Switches to [next]'s plates, carrying every item along with the plate
+  /// it sits on (a plate that moved or was replaced shifts its items by the
+  /// change in its own origin).
+  void _reflowInto(BoxProject next) {
+    final oldBoxes = project.plateBoxes;
+    final newBoxes = next.plateBoxes;
+    Vec2 shiftFor(Vec2 c) {
+      final i = project.plateIndexForPoint(c);
+      final j = math.min(i, newBoxes.length - 1);
+      return Vec2(newBoxes[j].minX - oldBoxes[i].minX, newBoxes[j].minY - oldBoxes[i].minY);
+    }
+
+    final placed = [
+      for (final p in project.placedTemplates)
+        () {
+          final template = library.byId(p.templateId);
+          final c = template == null ? p.position : _center(entitiesBoundingBox(placedTemplateEntities(template, p)));
+          return p.copyWith(position: p.position.add(shiftFor(c)));
+        }(),
+    ];
+    final holes = [for (final h in project.holes) h.copyWith(position: h.position.add(shiftFor(_center(h.boundingBox))))];
+    project = next.copyWith(placedTemplates: placed, holes: holes);
+  }
+
+  /// How many holes/templates currently sit on plate 2.
+  int get itemsOnLayer2 {
+    if (!project.dualLayer) return 0;
+    var n = 0;
+    for (final p in project.placedTemplates) {
+      final t = library.byId(p.templateId);
+      final c = t == null ? p.position : _center(entitiesBoundingBox(placedTemplateEntities(t, p)));
+      if (project.plateIndexForPoint(c) == 1) n++;
+    }
+    for (final h in project.holes) {
+      if (project.plateIndexForPoint(_center(h.boundingBox)) == 1) n++;
+    }
+    return n;
+  }
+
+  /// Removes every hole/template that sits on plate 2 (no-op for a one-layer
+  /// project).
+  void _dropPlate2Items() {
+    if (!project.dualLayer) return;
+    bool onPlate2(Vec2 c) => project.plateIndexForPoint(c) == 1;
+    final placed = [
+      for (final p in project.placedTemplates)
+        if (!onPlate2(() {
+          final t = library.byId(p.templateId);
+          return t == null ? p.position : _center(entitiesBoundingBox(placedTemplateEntities(t, p)));
+        }()))
+          p,
+    ];
+    final holes = [for (final h in project.holes) if (!onPlate2(_center(h.boundingBox))) h];
+    project = project.copyWith(placedTemplates: placed, holes: holes);
+    if (selectedId != null && !placed.any((p) => p.id == selectedId) && !holes.any((h) => h.id == selectedId)) selectedId = null;
   }
 
   void setPlateThicknessMm(double value) {
@@ -286,8 +373,9 @@ class DesignController extends ChangeNotifier {
   /// An item larger than the box is aligned to the box's min corner.
   void _clampIntoBox() {
     if (project.boxOutline.isEmpty) return;
-    final box = entitiesBoundingBox(project.boxOutline);
+    final boxes = project.plateBoxes;
     Vec2 shiftFor(BoundingBox b) {
+      final box = boxes[project.plateIndexForPoint(_center(b))];
       double axis(double min, double max, double boxMin, double boxMax) {
         if (min < boxMin - 1e-9) return boxMin - min;
         if (max > boxMax + 1e-9) return math.max(boxMax - max, boxMin - min);
