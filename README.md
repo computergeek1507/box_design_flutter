@@ -4,6 +4,8 @@ A tool for laying out controller enclosures (Web + Windows/Linux/macOS): pick a 
 
 **Try it live: [computergeek1507.github.io/box_design_flutter](https://computergeek1507.github.io/box_design_flutter/)**
 
+**My Website [https://boxdesign.scottnation.com/](https://boxdesign.scottnation.com/)**
+
 ## Download (Windows)
 
 Grab a build from the [Releases page](https://github.com/computergeek1507/box_design_flutter/releases):
