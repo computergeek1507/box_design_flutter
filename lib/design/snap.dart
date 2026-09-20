@@ -69,6 +69,55 @@ Vec2 snapPoint(Vec2 raw, DesignController controller, {double toleranceMm = 3.0}
   return best ?? raw;
 }
 
+/// Generic version of [snapPoint] for callers without a [DesignController]
+/// (the Template Maker): snaps [raw] to the nearest of [points], the
+/// round/arc centers of [centerOnly] entities (holes: their centers, not
+/// every point on their rim), or the centers and edges of [edges] entities
+/// (an outline), within [toleranceMm]. Returns [raw] if nothing is close.
+Vec2 snapToGeometry(
+  Vec2 raw, {
+  Iterable<Vec2> points = const [],
+  Iterable<DxfEntity> centerOnly = const [],
+  Iterable<DxfEntity> edges = const [],
+  double toleranceMm = 3.0,
+}) {
+  Vec2? best;
+  var bestScore = toleranceMm;
+
+  // [weight] < 1 makes a candidate win over an edge point that's a bit
+  // closer -- so a click near a corner lands on the corner itself.
+  void consider(Vec2 candidate, [double weight = 1.0]) {
+    final dx = candidate.x - raw.x;
+    final dy = candidate.y - raw.y;
+    final score = math.sqrt(dx * dx + dy * dy) * weight;
+    if (score < bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+
+  points.forEach(consider);
+  for (final entity in centerOnly) {
+    _entityCenters(entity).forEach(consider);
+  }
+  for (final entity in edges) {
+    final pts = entity.toPoints();
+    for (var i = 0; i + 1 < pts.length; i++) {
+      consider(_nearestOnSegment(pts[i], pts[i + 1], raw));
+    }
+    if (entity is DxfPolyline && entity.closed && pts.length > 2) {
+      consider(_nearestOnSegment(pts.last, pts.first, raw));
+    }
+    if (entity is DxfPolyline) {
+      for (final v in entity.vertices) {
+        consider(v.point, 0.5);
+      }
+    }
+    _entityCenters(entity).forEach(consider);
+  }
+  return best ?? raw;
+}
+
 /// Circle/arc centers worth snapping to within [entity]: a whole circle's
 /// center, a standalone arc's center, or -- for a polyline -- the center of
 /// each bulge (arc) segment, e.g. a slot/stadium's two rounded end caps or a

@@ -5,32 +5,58 @@ import 'design/design_controller.dart';
 import 'design/box_canvas.dart';
 import 'services/hole_preset_library.dart';
 import 'services/template_library.dart';
+import 'services/theme_settings.dart';
+import 'widgets/app_colors.dart';
 import 'widgets/left_palette.dart';
 import 'widgets/right_property_panel.dart';
 import 'widgets/top_toolbar.dart';
 import 'version.dart';
 
-void main() {
-  runApp(const BoxDesignApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final themeSettings = ThemeSettings();
+  await themeSettings.load();
+  runApp(BoxDesignApp(themeSettings: themeSettings));
 }
 
-class BoxDesignApp extends StatelessWidget {
-  const BoxDesignApp({super.key});
+class BoxDesignApp extends StatefulWidget {
+  /// Pass an already-loaded instance (see [main]) to avoid a flash of the
+  /// wrong theme at startup; otherwise the saved choice loads in the
+  /// background.
+  final ThemeSettings? themeSettings;
+
+  const BoxDesignApp({super.key, this.themeSettings});
+
+  @override
+  State<BoxDesignApp> createState() => _BoxDesignAppState();
+}
+
+class _BoxDesignAppState extends State<BoxDesignApp> {
+  late final ThemeSettings _themeSettings = widget.themeSettings ?? (ThemeSettings()..load());
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Box Design',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
+    return ListenableBuilder(
+      listenable: _themeSettings,
+      builder: (context, _) => MaterialApp(
+        title: 'Box Design',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey),
+        ),
+        darkTheme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.blueGrey, brightness: Brightness.dark),
+        ),
+        themeMode: _themeSettings.mode,
+        home: BoxDesignHomePage(themeSettings: _themeSettings),
       ),
-      home: const BoxDesignHomePage(),
     );
   }
 }
 
 class BoxDesignHomePage extends StatefulWidget {
-  const BoxDesignHomePage({super.key});
+  final ThemeSettings? themeSettings;
+
+  const BoxDesignHomePage({super.key, this.themeSettings});
 
   @override
   State<BoxDesignHomePage> createState() => _BoxDesignHomePageState();
@@ -77,7 +103,7 @@ class _BoxDesignHomePageState extends State<BoxDesignHomePage> {
                   onKeyEvent: (node, event) => _handleKeyEvent(event),
                   child: Column(
                     children: [
-                      TopToolbar(controller: _controller),
+                      TopToolbar(controller: _controller, themeSettings: widget.themeSettings),
                       Expanded(
                         child: Row(
                           children: [
@@ -92,7 +118,7 @@ class _BoxDesignHomePageState extends State<BoxDesignHomePage> {
                             const VerticalDivider(width: 1),
                             Expanded(
                               child: ColoredBox(
-                                color: Colors.grey.shade200,
+                                color: canvasBackground(context),
                                 child: BoxCanvas(
                                   controller: _controller,
                                   focusNode: _canvasFocusNode,

@@ -226,7 +226,8 @@ class _RightPropertyPanelState extends State<RightPropertyPanel> {
           const SizedBox(height: 20),
           FilledButton.tonal(
             onPressed: controller.deleteSelected,
-            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade50),
+            style: FilledButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.errorContainer,
+              foregroundColor: Theme.of(context).colorScheme.onErrorContainer),
             child: const Text('Delete'),
           ),
         ],

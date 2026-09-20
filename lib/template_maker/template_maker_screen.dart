@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -10,6 +11,7 @@ import '../models/vec2.dart';
 import '../services/file_io.dart';
 import '../services/simple_math.dart';
 import '../services/template_library.dart';
+import '../widgets/app_colors.dart';
 import 'template_maker_controller.dart';
 import 'template_outline_painter.dart';
 
@@ -57,6 +59,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   String? _draggingHoleId;
   _ImageDrag _imageDrag = _ImageDrag.none;
   Rect? _frozenView;
+  Vec2? _measureHover;
   final Map<String, GlobalKey> _holeRowKeys = {};
 
   /// While true the Id follows the Name (slugified); typing in the Id field
@@ -296,6 +299,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   }
 
   void _onPreviewPanStart(DragStartDetails details, Size size) {
+    if (_controller.measureMode) return;
     _frozenView = null;
     _frozenView = _currentView();
     final scale = _previewScale(size);
@@ -332,7 +336,23 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     });
   }
 
+  Vec2 _snapForMeasure(Offset localPx, Size size) {
+    final raw = _previewPxToMm(localPx, size);
+    return _controller.snapMeasurePoint(raw, 10 / _previewScale(size));
+  }
+
+  void _onPreviewTapUp(TapUpDetails details, Size size) {
+    if (!_controller.measureMode) return;
+    setState(() => _controller.placeMeasurePoint(_snapForMeasure(details.localPosition, size)));
+  }
+
+  void _onPreviewHover(PointerHoverEvent event, Size size) {
+    if (!_controller.measureMode) return;
+    setState(() => _measureHover = _snapForMeasure(event.localPosition, size));
+  }
+
   void _onPreviewTapDown(TapDownDetails details, Size size) {
+    if (_controller.measureMode) return;
     final hit = _holeNear(_previewPxToMm(details.localPosition, size), _previewScale(size));
     if (hit != null) {
       _selectHoleFromPreview(hit.id);
@@ -783,6 +803,20 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       appBar: AppBar(
         title: const Text('Template Maker'),
         actions: [
+          _controller.measureMode
+              ? FilledButton.icon(
+                  onPressed: () => setState(() {
+                    _controller.toggleMeasureMode();
+                    _measureHover = null;
+                  }),
+                  icon: const Icon(Icons.straighten, size: 18),
+                  label: const Text('Measure'),
+                )
+              : TextButton.icon(
+                  onPressed: () => setState(_controller.toggleMeasureMode),
+                  icon: const Icon(Icons.straighten, size: 18),
+                  label: const Text('Measure'),
+                ),
           TextButton.icon(onPressed: _newTemplate, icon: const Icon(Icons.add), label: const Text('New')),
           TextButton.icon(onPressed: _loadJson, icon: const Icon(Icons.folder_open), label: const Text('Load JSON')),
           TextButton.icon(onPressed: _loadDxf, icon: const Icon(Icons.folder_open), label: const Text('Load DXF')),
@@ -1004,21 +1038,32 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
           const VerticalDivider(width: 1),
           Expanded(
             child: ColoredBox(
-              color: Colors.grey.shade200,
+              color: canvasBackground(context),
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final size = constraints.biggest;
                   return AnimatedBuilder(
                     animation: _controller,
-                    builder: (context, _) => GestureDetector(
+                    builder: (context, _) => MouseRegion(
+                      cursor: _controller.measureMode ? SystemMouseCursors.precise : MouseCursor.defer,
+                      onHover: (event) => _onPreviewHover(event, size),
+                      onExit: (_) {
+                        if (_measureHover != null) setState(() => _measureHover = null);
+                      },
+                      child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTapDown: (details) => _onPreviewTapDown(details, size),
+                      onTapUp: (details) => _onPreviewTapUp(details, size),
                       onPanStart: (details) => _onPreviewPanStart(details, size),
                       onPanUpdate: (details) => _onPreviewPanUpdate(details, size),
                       onPanEnd: _onPreviewPanEnd,
                       child: CustomPaint(
                         painter: TemplateOutlinePainter(
                           viewRectMm: _currentView(),
+                          isDark: Theme.of(context).brightness == Brightness.dark,
+                          measureStart: _controller.measureStart,
+                          measureEnd: _controller.measureEnd,
+                          measureHover: _controller.measureMode ? _measureHover : null,
                           image: _controller.refImage,
                           imageRectMm: Rect.fromLTWH(
                               _controller.imageX, _controller.imageY, _controller.imageWidth, _controller.imageHeight),
@@ -1042,6 +1087,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                         ),
                         size: size,
                       ),
+                    ),
                     ),
                   );
                 },

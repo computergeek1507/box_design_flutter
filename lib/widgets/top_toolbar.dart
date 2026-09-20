@@ -8,6 +8,7 @@ import '../services/file_io.dart';
 import '../services/pdf_export.dart';
 import '../services/project_io.dart';
 import '../services/stl_export.dart';
+import '../services/theme_settings.dart';
 import '../services/threemf_export.dart';
 import '../template_maker/template_maker_screen.dart';
 
@@ -15,8 +16,9 @@ enum _ExportFormat { dxf, pdf, stl, threeMf }
 
 class TopToolbar extends StatefulWidget {
   final DesignController controller;
+  final ThemeSettings? themeSettings;
 
-  const TopToolbar({super.key, required this.controller});
+  const TopToolbar({super.key, required this.controller, this.themeSettings});
 
   @override
   State<TopToolbar> createState() => _TopToolbarState();
@@ -56,6 +58,30 @@ class _TopToolbarState extends State<TopToolbar> {
 
   void _snack(BuildContext context, String message) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Widget _themeButton(BuildContext context, ThemeSettings settings) {
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) {
+        final (icon, label) = switch (settings.mode) {
+          ThemeMode.light => (Icons.light_mode, 'Light'),
+          ThemeMode.dark => (Icons.dark_mode, 'Dark'),
+          ThemeMode.system => (Icons.brightness_auto, 'System'),
+        };
+        return PopupMenuButton<ThemeMode>(
+          tooltip: 'Theme: $label',
+          icon: Icon(icon),
+          initialValue: settings.mode,
+          onSelected: settings.setMode,
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: ThemeMode.system, child: Text('System')),
+            PopupMenuItem(value: ThemeMode.light, child: Text('Light')),
+            PopupMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+          ],
+        );
+      },
+    );
   }
 
   Widget _measureToggle(BuildContext context) {
@@ -286,6 +312,7 @@ class _TopToolbarState extends State<TopToolbar> {
                   icon: const Icon(Icons.tune),
                   tooltip: '3D print settings',
                 ),
+                if (widget.themeSettings != null) _themeButton(context, widget.themeSettings!),
               ],
             ),
           ),

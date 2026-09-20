@@ -12,6 +12,7 @@ Future<ui.Image> _image(int w, int h) {
 }
 
 void main() {
+  _measureTests();
   _selectionTests();
   _imageOpsTests();
   _detectionTests();
@@ -125,5 +126,33 @@ void _selectionTests() {
     expect(c.selectedHoleId, first);
     c.removeHole(first);
     expect(c.selectedHoleId, isNull);
+  });
+}
+
+void _measureTests() {
+  test('measure clicks cycle start -> end -> new start, and points snap to holes and corners', () {
+    final c = TemplateMakerController()..setOutlineWidth(100)..setOutlineHeight(50);
+    c.holes.add(TemplateMakerHole(id: 'a', x: 20, y: 25));
+    c.holes.add(TemplateMakerHole(id: 'b', x: 70, y: 25, shape: TemplateMakerHoleShape.slot, slotLength: 12, slotWidth: 4));
+
+    // Near a hole centre -> exact centre; near a corner -> the corner;
+    // near the top edge -> a point on that edge; far from everything -> unchanged.
+    expect(c.snapMeasurePoint(const Vec2(21.5, 24), 3), const Vec2(20, 25));
+    expect(c.snapMeasurePoint(const Vec2(1, 1.5), 3), const Vec2(0, 0));
+    final edge = c.snapMeasurePoint(const Vec2(40, 48.5), 3);
+    expect((edge.x, edge.y), (40.0, 50.0));
+    expect(c.snapMeasurePoint(const Vec2(45, 30), 3), const Vec2(45, 30));
+
+    expect(c.measureMode, isFalse);
+    c.toggleMeasureMode();
+    c.placeMeasurePoint(const Vec2(20, 25));
+    expect(c.measureEnd, isNull);
+    c.placeMeasurePoint(const Vec2(70, 25));
+    expect((c.measureStart, c.measureEnd), (const Vec2(20, 25), const Vec2(70, 25)));
+    c.placeMeasurePoint(const Vec2(5, 5));
+    expect((c.measureStart, c.measureEnd), (const Vec2(5, 5), null));
+
+    c.toggleMeasureMode();
+    expect((c.measureMode, c.measureStart), (false, null));
   });
 }

@@ -15,8 +15,15 @@ import 'design_controller.dart';
 class DesignPainter extends CustomPainter {
   final DesignController controller;
   final double pixelsPerMm;
+  final bool isDark;
 
-  DesignPainter(this.controller, {required this.pixelsPerMm}) : super(repaint: controller);
+  DesignPainter(this.controller, {required this.pixelsPerMm, this.isDark = false}) : super(repaint: controller);
+
+  Color get _outlineColor => isDark ? Colors.white : Colors.black;
+  Color get _templateColor => isDark ? Colors.white70 : Colors.black87;
+  Color get _holeColor => isDark ? Colors.redAccent.shade100 : Colors.red;
+  Color get _selectedColor => isDark ? Colors.lightBlueAccent.shade100 : Colors.blue;
+  Color get _measureColor => isDark ? Colors.deepPurple.shade300 : Colors.deepPurple;
 
   Offset _toPx(Vec2 p, double boxHeightMm) => Offset(p.x * pixelsPerMm, (boxHeightMm - p.y) * pixelsPerMm);
 
@@ -26,20 +33,20 @@ class DesignPainter extends CustomPainter {
     final boxHeightMm = project.boxHeight;
 
     _drawGrid(canvas, project, boxHeightMm);
-    _drawEntities(canvas, project.boxOutline, boxHeightMm, color: Colors.black, width: 2);
+    _drawEntities(canvas, project.boxOutline, boxHeightMm, color: _outlineColor, width: 2);
 
     for (final placed in project.placedTemplates) {
       final template = controller.library.byId(placed.templateId);
       if (template == null) continue;
       final entities = placedTemplateEntities(template, placed);
       final selected = controller.selectedId == placed.id;
-      _drawEntities(canvas, entities, boxHeightMm, color: selected ? Colors.blue : Colors.black87, width: selected ? 1.6 : 1.0);
+      _drawEntities(canvas, entities, boxHeightMm, color: selected ? _selectedColor : _templateColor, width: selected ? 1.6 : 1.0);
       _drawNameLabel(canvas, template.name, entitiesBoundingBox(entities), boxHeightMm, selected: selected);
     }
 
     for (final hole in project.holes) {
       final selected = controller.selectedId == hole.id;
-      _drawEntities(canvas, hole.toEntities(), boxHeightMm, color: selected ? Colors.blue : Colors.red, width: selected ? 1.6 : 1.0);
+      _drawEntities(canvas, hole.toEntities(), boxHeightMm, color: selected ? _selectedColor : _holeColor, width: selected ? 1.6 : 1.0);
     }
 
     _drawMeasurement(canvas, boxHeightMm);
@@ -52,13 +59,13 @@ class DesignPainter extends CustomPainter {
 
     if (end == null) {
       // First click placed; waiting for the second.
-      canvas.drawCircle(_toPx(start, boxHeightMm), 4, Paint()..color = Colors.deepPurple);
+      canvas.drawCircle(_toPx(start, boxHeightMm), 4, Paint()..color = _measureColor);
       return;
     }
 
     final p1 = _toPx(start, boxHeightMm);
     final p2 = _toPx(end, boxHeightMm);
-    const color = Colors.deepPurple;
+    final color = _measureColor;
     final linePaint = Paint()
       ..color = color
       ..strokeWidth = 1.4
@@ -112,7 +119,7 @@ class DesignPainter extends CustomPainter {
       text: TextSpan(
         text: name,
         style: TextStyle(
-          color: selected ? Colors.blue.shade900 : Colors.black54,
+          color: selected ? (isDark ? Colors.lightBlue.shade200 : Colors.blue.shade900) : (isDark ? Colors.white60 : Colors.black54),
           fontSize: 10,
           fontWeight: FontWeight.w500,
         ),

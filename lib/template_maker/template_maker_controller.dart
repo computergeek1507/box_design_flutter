@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 
+import '../design/snap.dart';
 import '../models/controller_template.dart';
 import '../models/dxf_entity.dart';
 import '../models/vec2.dart';
@@ -131,6 +132,51 @@ class TemplateMakerController extends ChangeNotifier {
   bool imageLockAspect = true;
 
   Uint8List? _refPixels;
+
+  /// Click-to-measure state: with [measureMode] on, the first click sets
+  /// [measureStart], the second [measureEnd], and a third starts over.
+  bool measureMode = false;
+  Vec2? measureStart;
+  Vec2? measureEnd;
+
+  void toggleMeasureMode() {
+    measureMode = !measureMode;
+    measureStart = null;
+    measureEnd = null;
+    notifyListeners();
+  }
+
+  void placeMeasurePoint(Vec2 mm) {
+    if (measureStart == null || measureEnd != null) {
+      measureStart = mm;
+      measureEnd = null;
+    } else {
+      measureEnd = mm;
+    }
+    notifyListeners();
+  }
+
+  /// Snaps [raw] (template mm) to a hole/slot center, a slot's rounded-end
+  /// center, a point on the outline (edges, corners, fillet centers) or a
+  /// corner of the reference image, within [toleranceMm].
+  Vec2 snapMeasurePoint(Vec2 raw, double toleranceMm) {
+    final entities = toTemplate().entities;
+    return snapToGeometry(
+      raw,
+      points: [
+        for (final h in holes) Vec2(h.x, h.y),
+        if (refImage != null) ...[
+          Vec2(imageX, imageY),
+          Vec2(imageX + imageWidth, imageY),
+          Vec2(imageX, imageY + imageHeight),
+          Vec2(imageX + imageWidth, imageY + imageHeight),
+        ],
+      ],
+      centerOnly: entities.skip(1),
+      edges: entities.take(1),
+      toleranceMm: toleranceMm,
+    );
+  }
 
   /// The hole/slot highlighted in the preview and list, if any.
   String? selectedHoleId;

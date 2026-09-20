@@ -138,6 +138,7 @@ class _BoxCanvasState extends State<BoxCanvas> {
                           painter: DesignPainter(
                             controller,
                             pixelsPerMm: pixelsPerMm,
+                            isDark: Theme.of(context).brightness == Brightness.dark,
                           ),
                         ),
                       ),

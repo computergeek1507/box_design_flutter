@@ -37,9 +37,20 @@ class TemplateOutlinePainter extends CustomPainter {
   /// The mm region shown (left/right = X range, top/bottom = min/max Y).
   /// Rect.zero frames just the outline.
   final Rect viewRectMm;
+  final bool isDark;
+
+  /// Measurement overlay (template mm); [measureHover] is the snap target
+  /// under the cursor while measuring.
+  final Vec2? measureStart;
+  final Vec2? measureEnd;
+  final Vec2? measureHover;
 
   const TemplateOutlinePainter({
     this.viewRectMm = Rect.zero,
+    this.isDark = false,
+    this.measureStart,
+    this.measureEnd,
+    this.measureHover,
     this.image,
     this.imageRectMm = Rect.zero,
     this.imageOpacity = 0.5,
@@ -86,7 +97,7 @@ class TemplateOutlinePainter extends CustomPainter {
     }
 
     final outlinePaint = Paint()
-      ..color = Colors.black
+      ..color = isDark ? Colors.white : Colors.black
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
     final cornerAmount = cornerSize <= 0 ? 0.0 : math.min(cornerSize, math.min(outlineWidth, outlineHeight) / 2);
@@ -104,7 +115,7 @@ class TemplateOutlinePainter extends CustomPainter {
     }
 
     final holePaint = Paint()
-      ..color = Colors.red
+      ..color = isDark ? Colors.redAccent.shade100 : Colors.red
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
     final selectedPaint = Paint()
@@ -138,6 +149,59 @@ class TemplateOutlinePainter extends CustomPainter {
             bold: hole.selected);
       }
     }
+
+    _paintMeasure(canvas, toPx);
+  }
+
+  void _paintMeasure(Canvas canvas, Offset Function(Vec2) toPx) {
+    final color = isDark ? Colors.deepPurple.shade300 : Colors.deepPurple;
+    final hover = measureHover;
+    if (hover != null) {
+      canvas.drawCircle(
+        toPx(hover),
+        7,
+        Paint()
+          ..color = color
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.5,
+      );
+    }
+    final start = measureStart;
+    if (start == null) return;
+    final p1 = toPx(start);
+    final end = measureEnd;
+    if (end == null) {
+      canvas.drawCircle(p1, 4, Paint()..color = color);
+      return;
+    }
+    final p2 = toPx(end);
+    final linePaint = Paint()
+      ..color = color
+      ..strokeWidth = 1.4
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(p1, p2, linePaint);
+    final dx = p2.dx - p1.dx, dy = p2.dy - p1.dy;
+    final length = math.sqrt(dx * dx + dy * dy);
+    if (length > 0.001) {
+      final px = -dy / length * 5, py = dx / length * 5;
+      canvas.drawLine(Offset(p1.dx - px, p1.dy - py), Offset(p1.dx + px, p1.dy + py), linePaint);
+      canvas.drawLine(Offset(p2.dx - px, p2.dy - py), Offset(p2.dx + px, p2.dy + py), linePaint);
+    }
+    for (final p in [p1, p2]) {
+      canvas.drawCircle(p, 3, Paint()..color = color);
+    }
+    final d = end.subtract(start);
+    final label = '\u0394X ${d.x.toStringAsFixed(2)}  \u0394Y ${d.y.toStringAsFixed(2)}\n'
+        '${math.sqrt(d.x * d.x + d.y * d.y).toStringAsFixed(2)} mm';
+    final tp = TextPainter(
+      text: TextSpan(text: label, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout();
+    final mid = Offset((p1.dx + p2.dx) / 2, (p1.dy + p2.dy) / 2);
+    final rect = Rect.fromCenter(center: mid, width: tp.width + 8, height: tp.height + 4);
+    canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(4)), Paint()..color = color);
+    tp.paint(canvas, Offset(rect.left + 4, rect.top + 2));
   }
 
   void _drawLabel(Canvas canvas, String text, Offset at, {bool bold = false}) {
@@ -145,7 +209,7 @@ class TemplateOutlinePainter extends CustomPainter {
       text: TextSpan(
         text: text,
         style: TextStyle(
-          color: bold ? Colors.lightBlue.shade900 : Colors.black87,
+          color: bold ? (isDark ? Colors.lightBlue.shade200 : Colors.lightBlue.shade900) : (isDark ? Colors.white70 : Colors.black87),
           fontSize: 11,
           fontWeight: bold ? FontWeight.bold : FontWeight.normal,
         ),
@@ -157,7 +221,11 @@ class TemplateOutlinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant TemplateOutlinePainter oldDelegate) {
-    return oldDelegate.viewRectMm != viewRectMm ||
+    return oldDelegate.measureStart != measureStart ||
+        oldDelegate.measureEnd != measureEnd ||
+        oldDelegate.measureHover != measureHover ||
+        oldDelegate.viewRectMm != viewRectMm ||
+        oldDelegate.isDark != isDark ||
         oldDelegate.image != image ||
         oldDelegate.imageRectMm != imageRectMm ||
         oldDelegate.imageOpacity != imageOpacity ||
