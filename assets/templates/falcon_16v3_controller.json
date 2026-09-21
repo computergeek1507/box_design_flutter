@@ -61,5 +61,175 @@
       },
       "radius": 1.85
     }
+  ],
+  "annotations": [
+    {
+      "type": "rect",
+      "x": 5.0,
+      "y": 5.0,
+      "width": 15.0,
+      "height": 10.0
+    },
+    {
+      "type": "rect",
+      "x": 165.0,
+      "y": 5.0,
+      "width": 15.0,
+      "height": 10.0
+    },
+    {
+      "type": "rect",
+      "x": 10.0,
+      "y": 80.0,
+      "width": 30.0,
+      "height": 25.0
+    },
+    {
+      "type": "rect",
+      "x": 50.0,
+      "y": 100.0,
+      "width": 15.0,
+      "height": 15.159999999999997
+    },
+    {
+      "type": "rect",
+      "x": 70.0,
+      "y": 100.0,
+      "width": 15.0,
+      "height": 15.159999999999997
+    },
+    {
+      "type": "rect",
+      "x": 160.0,
+      "y": 95.0,
+      "width": 15.0,
+      "height": 15.0
+    },
+    {
+      "type": "rect",
+      "x": 160.0,
+      "y": 75.0,
+      "width": 15.0,
+      "height": 15.0
+    },
+    {
+      "type": "rect",
+      "x": 160.0,
+      "y": 55.0,
+      "width": 15.0,
+      "height": 15.0
+    },
+    {
+      "type": "rect",
+      "x": 35.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 35.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 50.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 50.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 65.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 65.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 80.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 80.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 95.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 95.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 110.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 110.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 125.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 140.0,
+      "y": 25.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 125.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 140.0,
+      "y": 15.0,
+      "width": 10.0,
+      "height": 5.0
+    }
   ]
 }
