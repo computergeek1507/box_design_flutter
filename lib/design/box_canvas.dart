@@ -37,6 +37,18 @@ class _BoxCanvasState extends State<BoxCanvas> {
       TransformationController();
   String? _draggingId;
 
+  /// True while a background drag is panning the view.
+  bool _panning = false;
+
+  /// Ends any drag. Also runs when a gesture is cancelled or the pointer
+  /// leaves the canvas (e.g. off the window), where no pointer-up may ever
+  /// arrive: without it the item or the whole view would stay "on" and keep
+  /// following the mouse.
+  void _endDrags() {
+    _draggingId = null;
+    _panning = false;
+  }
+
   DesignController get controller => widget.controller;
 
   @override
@@ -101,7 +113,9 @@ class _BoxCanvasState extends State<BoxCanvas> {
           itemOverlays.add(_dragHandle(rect, hole.id, boxHeightMm));
         }
 
-        return Listener(
+        return MouseRegion(
+          onExit: (_) => _endDrags(),
+          child: Listener(
           // Purely an observer -- doesn't join the gesture arena, so it
           // can't steal drags/pans from the detectors below.
           onPointerDown: (_) => widget.focusNode?.requestFocus(),
@@ -150,7 +164,12 @@ class _BoxCanvasState extends State<BoxCanvas> {
                         child: GestureDetector(
                           behavior: HitTestBehavior.translucent,
                           onTap: () => controller.select(null),
-                          onPanUpdate: (details) => _panBy(details.delta),
+                          onPanStart: (_) => _panning = true,
+                          onPanUpdate: (details) {
+                            if (_panning) _panBy(details.delta);
+                          },
+                          onPanEnd: (_) => _endDrags(),
+                          onPanCancel: _endDrags,
                         ),
                       ),
                       ...itemOverlays,
@@ -193,6 +212,7 @@ class _BoxCanvasState extends State<BoxCanvas> {
               );
             },
           ),
+          ),
         );
       },
     );
@@ -219,6 +239,9 @@ class _BoxCanvasState extends State<BoxCanvas> {
           _moveItem(id, deltaMm);
         },
         onPanEnd: (_) => _draggingId = null,
+        onPanCancel: () {
+          if (_draggingId == id) _draggingId = null;
+        },
         onTap: () => controller.select(id),
       ),
     );
