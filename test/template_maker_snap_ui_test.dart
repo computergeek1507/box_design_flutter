@@ -57,7 +57,7 @@ void main() {
     // Grab the hole where it now sits (the preview fits the plate inside a 32 px margin).
     final size = tester.getSize(canvas);
     final p = painter();
-    final scale = ((size.width - 64) / p.outlineWidth).clamp(0, (size.height - 64) / p.outlineHeight).toDouble();
+    final scale = ((size.width - 64) / p.viewRectMm.width).clamp(0, (size.height - 64) / p.viewRectMm.height).toDouble();
     final hole = start + Offset((c.x - p.outlineWidth / 2) * scale, -(c.y - p.outlineHeight / 2) * scale);
     await dragBy(hole, const Offset(13, 7));
     await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
@@ -108,7 +108,7 @@ void main() {
     Offset px(Vec2 mm) {
       final size = tester.getSize(canvas);
       final p = painter();
-      final scale = ((size.width - 64) / p.outlineWidth).clamp(0, (size.height - 64) / p.outlineHeight).toDouble();
+      final scale = ((size.width - 64) / p.viewRectMm.width).clamp(0, (size.height - 64) / p.viewRectMm.height).toDouble();
       return tester.getCenter(canvas) + Offset((mm.x - p.outlineWidth / 2) * scale, -(mm.y - p.outlineHeight / 2) * scale);
     }
 
@@ -160,7 +160,7 @@ void main() {
     Offset px(Vec2 mm) {
       final size = tester.getSize(canvas);
       final p = painter();
-      final scale = ((size.width - 64) / p.outlineWidth).clamp(0, (size.height - 64) / p.outlineHeight).toDouble();
+      final scale = ((size.width - 64) / p.viewRectMm.width).clamp(0, (size.height - 64) / p.viewRectMm.height).toDouble();
       return tester.getCenter(canvas) + Offset((mm.x - p.outlineWidth / 2) * scale, -(mm.y - p.outlineHeight / 2) * scale);
     }
 
@@ -211,7 +211,7 @@ void main() {
       Offset px(Vec2 mm) {
         final size = tester.getSize(canvas);
         final p = painter();
-        final scale = ((size.width - 64) / p.outlineWidth).clamp(0, (size.height - 64) / p.outlineHeight).toDouble();
+        final scale = ((size.width - 64) / p.viewRectMm.width).clamp(0, (size.height - 64) / p.viewRectMm.height).toDouble();
         return tester.getCenter(canvas) + Offset((mm.x - p.outlineWidth / 2) * scale, -(mm.y - p.outlineHeight / 2) * scale);
       }
 

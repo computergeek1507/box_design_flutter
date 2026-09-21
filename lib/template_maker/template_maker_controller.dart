@@ -228,8 +228,19 @@ class TemplateMakerController extends ChangeNotifier {
 
   /// The drawing layer.
   final List<TemplateMakerNote> notes = [];
-  String? selectedNoteId;
   int _nextNoteSeq = 1;
+
+  /// Every selected note. [selectedNoteId] is the primary one (the one whose
+  /// handles and fields are shown when it's the only one); assigning it selects
+  /// just that note, or none for null.
+  final Set<String> selectedNoteIds = {};
+  String? _primaryNoteId;
+  String? get selectedNoteId => _primaryNoteId;
+  set selectedNoteId(String? id) {
+    selectedNoteIds.clear();
+    _primaryNoteId = id;
+    if (id != null) selectedNoteIds.add(id);
+  }
 
   /// Click-to-measure state: with [measureMode] on, the first click sets
   /// [measureStart], the second [measureEnd], and a third starts over.
@@ -307,8 +318,10 @@ class TemplateMakerController extends ChangeNotifier {
         ys.add(h.y);
       }
       if (excludeNoteId != null) {
+        // A dragged multi-selection moves together, so none of it is a target.
+        final moving = selectedNoteIds.contains(excludeNoteId) ? selectedNoteIds : {excludeNoteId};
         for (final n in notes) {
-          if (n.id == excludeNoteId) continue;
+          if (moving.contains(n.id)) continue;
           xs.add(n.x);
           ys.add(n.y);
         }
@@ -951,14 +964,113 @@ class TemplateMakerController extends ChangeNotifier {
 
   void removeNote(String noteId) {
     notes.removeWhere((n) => n.id == noteId);
-    if (selectedNoteId == noteId) selectedNoteId = null;
+    _dropFromSelection({noteId});
     notifyListeners();
   }
 
+  void _dropFromSelection(Set<String> ids) {
+    selectedNoteIds.removeAll(ids);
+    if (ids.contains(_primaryNoteId)) _primaryNoteId = selectedNoteIds.lastOrNull;
+  }
+
   void selectNote(String? noteId) {
-    if (selectedNoteId == noteId) return;
+    if (selectedNoteId == noteId && selectedNoteIds.length <= 1) return;
     selectedNoteId = noteId;
     notifyListeners();
+  }
+
+  /// Adds [noteId] to the selection, or removes it if already selected
+  /// (Shift/Ctrl+click).
+  void toggleNoteSelection(String noteId) {
+    if (selectedNoteIds.contains(noteId)) {
+      _dropFromSelection({noteId});
+    } else {
+      selectedNoteIds.add(noteId);
+      _primaryNoteId = noteId;
+    }
+    notifyListeners();
+  }
+
+  /// Makes exactly [ids] the selection.
+  void setSelectedNotes(Set<String> ids) {
+    if (ids.length == selectedNoteIds.length && ids.containsAll(selectedNoteIds)) return;
+    selectedNoteIds
+      ..clear()
+      ..addAll(ids);
+    if (!ids.contains(_primaryNoteId)) _primaryNoteId = ids.lastOrNull;
+    notifyListeners();
+  }
+
+  void selectAllNotes() => setSelectedNotes({for (final n in notes) n.id});
+
+  /// Removes every selected note; returns how many were removed.
+  int deleteSelectedNotes() {
+    final ids = {...selectedNoteIds};
+    if (ids.isEmpty) return 0;
+    notes.removeWhere((n) => ids.contains(n.id));
+    selectedNoteId = null;
+    notifyListeners();
+    return ids.length;
+  }
+
+  /// Moves every selected note by ([dx], [dy]) mm.
+  void moveSelectedNotesBy(double dx, double dy) {
+    for (final n in notes) {
+      if (!selectedNoteIds.contains(n.id)) continue;
+      n.x += dx;
+      n.y += dy;
+      n.x2 += dx;
+      n.y2 += dy;
+    }
+    notifyListeners();
+  }
+
+  /// The ids of the notes touching the rectangle [r] (template mm), for a
+  /// drag-selection box.
+  Set<String> notesInRect(ui.Rect r) {
+    bool segmentHits(Vec2 a, Vec2 b) {
+      // Liang-Barsky clip of the segment against the rectangle.
+      var t0 = 0.0, t1 = 1.0;
+      final dx = b.x - a.x, dy = b.y - a.y;
+      bool clip(double p, double q) {
+        if (p == 0) return q >= 0;
+        final t = q / p;
+        if (p < 0) {
+          if (t > t1) return false;
+          if (t > t0) t0 = t;
+        } else {
+          if (t < t0) return false;
+          if (t < t1) t1 = t;
+        }
+        return true;
+      }
+
+      return clip(-dx, a.x - r.left) && clip(dx, r.right - a.x) && clip(-dy, a.y - r.top) && clip(dy, r.bottom - a.y);
+    }
+
+    bool boxHits(double minX, double minY, double maxX, double maxY) =>
+        maxX >= r.left && minX <= r.right && maxY >= r.top && minY <= r.bottom;
+
+    // Rect's top/bottom are the min/max y here (template mm, not screen).
+    return {
+      for (final n in notes)
+        if (switch (n.type) {
+          AnnotationType.line => segmentHits(Vec2(n.x, n.y), Vec2(n.x2, n.y2)),
+          AnnotationType.rect => boxHits(n.x, n.y, n.x + n.width, n.y + n.height),
+          AnnotationType.circle => () {
+              final cx = n.x.clamp(r.left, r.right), cy = n.y.clamp(r.top, r.bottom);
+              return math.pow(n.x - cx, 2) + math.pow(n.y - cy, 2) <= n.radius * n.radius;
+            }(),
+          AnnotationType.text => () {
+              final w = noteTextWidthMm(n);
+              final corners = [Vec2(0, 0), Vec2(w, 0), Vec2(w, n.height), Vec2(0, n.height)]
+                  .map((c) => c.rotated(n.rotationDeg).add(Vec2(n.x, n.y)));
+              final xs = corners.map((c) => c.x), ys = corners.map((c) => c.y);
+              return boxHits(xs.reduce(math.min), ys.reduce(math.min), xs.reduce(math.max), ys.reduce(math.max));
+            }(),
+        })
+          n.id,
+    };
   }
 
   void updateNote(

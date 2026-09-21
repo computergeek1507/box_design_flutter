@@ -47,6 +47,12 @@ class TemplateOutlinePainter extends CustomPainter {
   final List<TemplateMakerNote> notes;
   final String? selectedNoteId;
 
+  /// Every selected note (a superset of [selectedNoteId]); all are highlighted.
+  final Set<String> selectedNoteIds;
+
+  /// A drag-selection box in template mm (min-Y as top), drawn in drawing mode.
+  final Rect? selectionRectMm;
+
   /// Drag handles of the selected note (template mm), drawn in drawing mode.
   final List<Vec2> noteHandles;
 
@@ -77,6 +83,8 @@ class TemplateOutlinePainter extends CustomPainter {
     this.drawingMode = false,
     this.notes = const [],
     this.selectedNoteId,
+    this.selectedNoteIds = const {},
+    this.selectionRectMm,
     this.noteHandles = const [],
     this.holeHandles = const [],
     this.ghostNotes = false,
@@ -191,8 +199,23 @@ class TemplateOutlinePainter extends CustomPainter {
 
     if (drawingMode) _paintNotes(canvas, toPx, scale);
     _paintHandles(canvas, toPx, drawingMode ? noteHandles : holeHandles);
+    if (drawingMode) _paintSelectionRect(canvas, toPx);
     _paintGuides(canvas, toPx, view);
     _paintMeasure(canvas, toPx);
+  }
+
+  void _paintSelectionRect(Canvas canvas, Offset Function(Vec2) toPx) {
+    final r = selectionRectMm;
+    if (r == null) return;
+    final box = Rect.fromPoints(toPx(Vec2(r.left, r.top)), toPx(Vec2(r.right, r.bottom)));
+    canvas.drawRect(box, Paint()..color = Colors.lightBlue.withValues(alpha: 0.15));
+    canvas.drawRect(
+      box,
+      Paint()
+        ..color = Colors.lightBlue
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
   }
 
   void _paintHandles(Canvas canvas, Offset Function(Vec2) toPx, List<Vec2> handles) {
@@ -251,7 +274,7 @@ class TemplateOutlinePainter extends CustomPainter {
 
   void _paintNotes(Canvas canvas, Offset Function(Vec2) toPx, double scale, {bool ghost = false}) {
     for (final n in notes) {
-      final selected = !ghost && n.id == selectedNoteId;
+      final selected = !ghost && (n.id == selectedNoteId || selectedNoteIds.contains(n.id));
       final color = selected ? Colors.lightBlue : noteColor(isDark: isDark).withValues(alpha: ghost ? 0.35 : 1.0);
       final paint = Paint()
         ..color = color
@@ -340,6 +363,8 @@ class TemplateOutlinePainter extends CustomPainter {
   bool shouldRepaint(covariant TemplateOutlinePainter oldDelegate) {
     return oldDelegate.drawingMode != drawingMode ||
         oldDelegate.selectedNoteId != selectedNoteId ||
+        oldDelegate.selectedNoteIds != selectedNoteIds ||
+        oldDelegate.selectionRectMm != selectionRectMm ||
         oldDelegate.ghostNotes != ghostNotes ||
         oldDelegate.showGrid != showGrid ||
         oldDelegate.gridMm != gridMm ||

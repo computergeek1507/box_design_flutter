@@ -18,6 +18,11 @@ import 'template_maker_controller.dart';
 import 'template_outline_painter.dart';
 
 const double _outlinePreviewMargin = 32.0;
+
+/// Extra space shown around the plate (at least this many mm, or this fraction
+/// of its larger side), so items can be dragged partly off the plate.
+const double _offPlateMinMm = 10.0;
+const double _offPlateFraction = 0.1;
 const double _holeDragHitPx = 14.0;
 const double _imageHandleHitPx = 12.0;
 
@@ -70,6 +75,22 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
 
   /// The note being created by the current draw-tool drag.
   String? _creatingNoteId;
+
+  /// A drag-selection box being dragged on empty canvas (template mm), and
+  /// the notes that were already selected when it started (kept when the
+  /// box is dragged with Shift/Ctrl held).
+  Vec2? _marqueeStart;
+  Vec2? _marqueeEnd;
+  Set<String> _marqueeBase = {};
+
+  /// Set on pressing a note that is part of a multi-selection: a plain click
+  /// (no drag) narrows the selection to it, but a drag moves them all.
+  String? _collapseToNoteId;
+
+  bool get _additiveKey {
+    final k = HardwareKeyboard.instance;
+    return k.isShiftPressed || k.isControlPressed || k.isMetaPressed;
+  }
 
   /// The text note being edited in place on the canvas (double-click), the
   /// text it had before, and the field that edits it.
@@ -308,7 +329,10 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       right = math.max(right, c.imageX + c.imageWidth);
       top = math.max(top, c.imageY + c.imageHeight);
     }
-    return Rect.fromLTRB(left, bottom, right, top);
+    // Leave room beyond the plate so items can be dragged a little off it and
+    // still be seen and grabbed.
+    final pad = math.max(_offPlateMinMm, _offPlateFraction * math.max(right - left, top - bottom));
+    return Rect.fromLTRB(left - pad, bottom - pad, right + pad, top + pad);
   }
 
   double _previewScale(Size size) {
@@ -357,6 +381,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   }
 
   void _onPreviewPanStart(DragStartDetails details, Size size) {
+    _focusCanvasKeys();
     if (_controller.measureMode) return;
     _frozenView = null;
     _frozenView = _currentView();
@@ -380,7 +405,11 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         setState(_refreshNoteFields);
         return;
       }
-      final selected = _controller.notes.where((n) => n.id == _controller.selectedNoteId).firstOrNull;
+      _collapseToNoteId = null;
+      // Handles only show (and can only be grabbed) with a single note selected.
+      final selected = _controller.selectedNoteIds.length > 1
+          ? null
+          : _controller.notes.where((n) => n.id == _controller.selectedNoteId).firstOrNull;
       final grabbed = selected == null ? null : _noteHandleAt(selected, mm, scale);
       if (selected != null && grabbed != null) {
         _draggingNoteId = selected.id;
@@ -389,10 +418,27 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         return;
       }
       final hit = _noteAt(mm, scale);
-      _draggingNoteId = hit?.id;
+      final additive = _additiveKey;
+      if (hit == null) {
+        // Empty canvas: drag out a selection box.
+        _draggingNoteId = null;
+        _marqueeStart = _marqueeEnd = mm;
+        _marqueeBase = additive ? {..._controller.selectedNoteIds} : {};
+        setState(() {
+          if (!additive) _controller.selectNote(null);
+        });
+        return;
+      }
+      if (additive) {
+        // Shift/Ctrl on a note toggles it (see the tap handler); no drag.
+        _draggingNoteId = null;
+        return;
+      }
+      _draggingNoteId = hit.id;
       _lastNoteMm = mm;
-      _noteRawAnchor = hit == null ? mm : Vec2(hit.x, hit.y);
-      setState(() => _controller.selectNote(hit?.id));
+      _noteRawAnchor = Vec2(hit.x, hit.y);
+      // Grabbing a note that is already part of a multi-selection drags them all.
+      if (!_controller.selectedNoteIds.contains(hit.id)) setState(() => _controller.selectNote(hit.id));
       return;
     }
     _holeHandle = null;
@@ -458,6 +504,12 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   }
 
   void _onPreviewTapUp(TapUpDetails details, Size size) {
+    final collapse = _collapseToNoteId;
+    if (collapse != null) {
+      _collapseToNoteId = null;
+      setState(() => _controller.selectNote(collapse));
+      return;
+    }
     if (!_controller.measureMode) return;
     setState(() => _controller.placeMeasurePoint(_snapForMeasure(details.localPosition, size)));
   }
@@ -545,17 +597,36 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     setState(() => _measureHover = _snapForMeasure(event.localPosition, size));
   }
 
+  /// Clicking the canvas doesn't take keyboard focus by itself, so after
+  /// typing in a field (or any focus loss) Delete and Ctrl+C/V would go
+  /// nowhere. Claim it, unless an in-canvas text edit owns the keyboard.
+  void _focusCanvasKeys() {
+    if (_editingNoteId == null) _keyFocus.requestFocus();
+  }
+
   void _onPreviewTapDown(TapDownDetails details, Size size) {
+    _focusCanvasKeys();
     if (_controller.measureMode) return;
     if (_controller.layer == TemplateMakerLayer.drawing) {
       final hit = _noteAt(_previewPxToMm(details.localPosition, size), _previewScale(size));
+      _collapseToNoteId = null;
+      if (_additiveKey) {
+        // Shift/Ctrl+click adds a note to (or removes it from) the selection.
+        if (hit != null) setState(() => _controller.toggleNoteSelection(hit.id));
+        return;
+      }
       final now = DateTime.now();
       final doubleClick = hit != null &&
           hit.id == _lastTapNoteId &&
           now.difference(_lastTapAt) < const Duration(milliseconds: 400);
       _lastTapAt = now;
       _lastTapNoteId = hit?.id;
-      setState(() => _controller.selectNote(hit?.id));
+      if (hit != null && _controller.selectedNoteIds.length > 1 && _controller.selectedNoteIds.contains(hit.id)) {
+        // Keep the group so it can be dragged; a plain click narrows it on release.
+        _collapseToNoteId = hit.id;
+      } else {
+        setState(() => _controller.selectNote(hit?.id));
+      }
       if (doubleClick && _drawTool == null && hit.type == AnnotationType.text) _beginTextEdit(hit);
       return;
     }
@@ -569,6 +640,16 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
 
   void _onPreviewPanUpdate(DragUpdateDetails details, Size size) {
     if (_controller.layer == TemplateMakerLayer.drawing) {
+      final boxStart = _marqueeStart;
+      if (boxStart != null) {
+        final p = _previewPxToMm(details.localPosition, size);
+        setState(() {
+          _marqueeEnd = p;
+          final box = Rect.fromLTRB(math.min(boxStart.x, p.x), math.min(boxStart.y, p.y), math.max(boxStart.x, p.x), math.max(boxStart.y, p.y));
+          _controller.setSelectedNotes({..._marqueeBase, ..._controller.notesInRect(box)});
+        });
+        return;
+      }
       final id = _draggingNoteId;
       if (id == null) return;
       final handle = _noteHandle;
@@ -594,7 +675,11 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       final note = _controller.notes.firstWhere((n) => n.id == id);
       setState(() {
         final target = _snapDrag(_noteRawAnchor, size, excludeNoteId: id);
-        _controller.moveNoteBy(id, target.x - note.x, target.y - note.y);
+        if (_controller.selectedNoteIds.length > 1 && _controller.selectedNoteIds.contains(id)) {
+          _controller.moveSelectedNotesBy(target.x - note.x, target.y - note.y);
+        } else {
+          _controller.moveNoteBy(id, target.x - note.x, target.y - note.y);
+        }
         _refreshNoteFields();
       });
       return;
@@ -648,6 +733,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
           };
       if (n != null && tiny) _controller.removeNote(creatingId);
     }
+    _marqueeStart = _marqueeEnd = null;
     _draggingHoleId = null;
     _holeHandle = null;
     _draggingNoteId = null;
@@ -968,7 +1054,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       if (_typingInTextField || _controller.measureMode || !_controller.canCopy) return KeyEventResult.ignored;
       setState(() {
         if (_controller.layer == TemplateMakerLayer.drawing) {
-          _controller.removeNote(_controller.selectedNoteId!);
+          _controller.deleteSelectedNotes();
         } else {
           _controller.removeHole(_controller.selectedHoleId!);
         }
@@ -977,6 +1063,11 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     }
     if (!(keyboard.isControlPressed || keyboard.isMetaPressed) || keyboard.isAltPressed) return KeyEventResult.ignored;
     if (_typingInTextField) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.keyA) {
+      if (_controller.layer != TemplateMakerLayer.drawing || _controller.notes.isEmpty) return KeyEventResult.ignored;
+      setState(_controller.selectAllNotes);
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.keyC) {
       if (!_controller.copySelection()) return KeyEventResult.ignored;
       _snack('Copied');
@@ -1447,6 +1538,13 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                           drawingMode: _controller.layer == TemplateMakerLayer.drawing,
                           notes: _controller.notes,
                           selectedNoteId: _controller.selectedNoteId,
+                          selectedNoteIds: {..._controller.selectedNoteIds},
+                          selectionRectMm: () {
+                            final a = _marqueeStart, b = _marqueeEnd;
+                            return a == null || b == null
+                                ? null
+                                : Rect.fromLTRB(math.min(a.x, b.x), math.min(a.y, b.y), math.max(a.x, b.x), math.max(a.y, b.y));
+                          }(),
                           holeHandles: () {
                             final h = _controller.holes.where((e) => e.id == _controller.selectedHoleId).firstOrNull;
                             return h == null || _controller.layer == TemplateMakerLayer.drawing
@@ -1455,7 +1553,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                           }(),
                           noteHandles: () {
                             final n = _controller.notes.where((e) => e.id == _controller.selectedNoteId).firstOrNull;
-                            return n == null || _controller.layer != TemplateMakerLayer.drawing
+                            return n == null || _controller.layer != TemplateMakerLayer.drawing || _controller.selectedNoteIds.length > 1
                                 ? const <Vec2>[]
                                 : [for (final h in _controller.noteHandles(n)) h.point];
                           }(),
@@ -1719,6 +1817,29 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
           drawTool(AnnotationType.circle, Icons.circle_outlined, 'Circle'),
         ],
       ),
+      const SizedBox(height: 4),
+      Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          TextButton.icon(
+            onPressed: _controller.notes.isEmpty ? null : () => setState(_controller.selectAllNotes),
+            icon: const Icon(Icons.select_all, size: 18),
+            label: const Text('Select all'),
+          ),
+          TextButton.icon(
+            onPressed: _controller.selectedNoteIds.isEmpty ? null : () => setState(_controller.deleteSelectedNotes),
+            icon: const Icon(Icons.delete_sweep_outlined, size: 18),
+            label: Text(_controller.selectedNoteIds.length > 1
+                ? 'Delete ${_controller.selectedNoteIds.length} selected'
+                : 'Delete selected'),
+          ),
+        ],
+      ),
+      Text(
+        'Drag a box on empty canvas, or Shift/Ctrl+click, to select several. Delete removes them all.',
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
       if (_drawTool != null)
         Padding(
           padding: const EdgeInsets.only(top: 4),
@@ -1732,7 +1853,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   }
 
   Widget _noteRow(BuildContext context, TemplateMakerNote n) {
-    final selected = _controller.selectedNoteId == n.id;
+    final selected = _controller.selectedNoteIds.contains(n.id);
     final title = switch (n.type) {
       AnnotationType.text => 'Text',
       AnnotationType.line => 'Line',
@@ -1747,7 +1868,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       padding: const EdgeInsets.only(top: 8),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onTap: () => setState(() => _controller.selectNote(n.id)),
+        onTap: () => setState(() => _additiveKey ? _controller.toggleNoteSelection(n.id) : _controller.selectNote(n.id)),
         child: Container(
           padding: const EdgeInsets.all(6),
           decoration: BoxDecoration(
