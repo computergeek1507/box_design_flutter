@@ -9,6 +9,7 @@ import '../services/file_io.dart';
 import '../services/hole_preset_library.dart';
 import '../services/template_library.dart';
 import '../template_maker/template_maker_screen.dart';
+import 'hover_preview.dart';
 
 /// Compares two names the way a person would rather than plain lexicographic
 /// order, so e.g. "K8-Max" sorts before "K16" before "K40" (plain string
@@ -131,7 +132,9 @@ class _LeftPaletteState extends State<LeftPalette> {
           child: Text('Box Template', style: TextStyle(fontWeight: FontWeight.bold)),
         ),
         for (final box in boxes)
-          ListTile(
+          HoverPreview(
+            preview: () => templatePreview(box),
+            child: ListTile(
             dense: true,
             selected: box.id == activeId,
             selectedTileColor: Theme.of(context).colorScheme.primaryContainer,
@@ -156,6 +159,7 @@ class _LeftPaletteState extends State<LeftPalette> {
                   )
                 : null,
             onTap: () => _applyBox(box),
+            ),
           ),
         if (boxes.isEmpty)
           const Padding(
@@ -212,7 +216,9 @@ class _LeftPaletteState extends State<LeftPalette> {
       initiallyExpanded: true,
       children: [
         for (final template in items)
-          Draggable<PaletteDragItem>(
+          HoverPreview(
+            preview: () => templatePreview(template),
+            child: Draggable<PaletteDragItem>(
             data: TemplateDragItem(template.id),
             feedback: _dragFeedback(template.name),
             child: ListTile(
@@ -239,6 +245,7 @@ class _LeftPaletteState extends State<LeftPalette> {
                     )
                   : null,
             ),
+            ),
           ),
         if (items.isEmpty)
           Padding(
@@ -263,10 +270,13 @@ class _LeftPaletteState extends State<LeftPalette> {
       initiallyExpanded: true,
       children: [
         for (final preset in presets)
-          Draggable<PaletteDragItem>(
-            data: HolePresetDragItem(preset),
-            feedback: _dragFeedback(preset.name),
-            child: ListTile(dense: true, title: Text(preset.name)),
+          HoverPreview(
+            preview: () => holePresetPreview(preset),
+            child: Draggable<PaletteDragItem>(
+              data: HolePresetDragItem(preset),
+              feedback: _dragFeedback(preset.name),
+              child: ListTile(dense: true, title: Text(preset.name)),
+            ),
           ),
         if (presets.isEmpty)
           Padding(
