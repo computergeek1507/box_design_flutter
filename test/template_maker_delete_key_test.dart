@@ -51,8 +51,6 @@ void main() {
     await tester.pumpAndSettle();
 
     // Click the line on the canvas to select it, then press Delete.
-    await tester.tap(find.byIcon(Icons.horizontal_rule)); // disarm the draw tool
-    await tester.pumpAndSettle();
     await tester.tapAt(center, kind: PointerDeviceKind.mouse);
     await tester.pumpAndSettle();
     expect(painter().selectedNoteId, isNotNull);

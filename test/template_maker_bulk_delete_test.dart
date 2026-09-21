@@ -95,8 +95,6 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Drawing'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byIcon(Icons.horizontal_rule));
-    await tester.pumpAndSettle();
 
     final canvas = find.byWidgetPredicate((w) => w is CustomPaint && w.painter is TemplateOutlinePainter);
     TemplateOutlinePainter painter() => tester.widget<CustomPaint>(canvas).painter! as TemplateOutlinePainter;
@@ -110,14 +108,18 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    // Three horizontal lines, well apart.
+    Future<void> toggleLineTool() async {
+      await tester.tap(find.byIcon(Icons.horizontal_rule));
+      await tester.pumpAndSettle();
+    }
+
+    // The tool stays armed, so one arming draws all three lines, well apart.
+    await toggleLineTool();
     for (final dy in [-100.0, 0.0, 100.0]) {
       await drag(center + Offset(-60, dy), center + Offset(60, dy));
     }
     expect(painter().notes, hasLength(3));
-
-    await tester.tap(find.byIcon(Icons.horizontal_rule)); // disarm the draw tool
-    await tester.pumpAndSettle();
+    await toggleLineTool(); // back to selecting
 
     // A box around the top two lines selects them; the third is left alone.
     await drag(center + const Offset(-110, -140), center + const Offset(110, 30));
@@ -128,13 +130,11 @@ void main() {
     expect(painter().notes, hasLength(1));
 
     // Ctrl+click: draw two more lines, add both plus the survivor by clicking.
-    await tester.tap(find.byIcon(Icons.horizontal_rule));
-    await tester.pumpAndSettle();
+    await toggleLineTool();
     for (final dy in [-100.0, 0.0]) {
       await drag(center + Offset(-60, dy), center + Offset(60, dy));
     }
-    await tester.tap(find.byIcon(Icons.horizontal_rule));
-    await tester.pumpAndSettle();
+    await toggleLineTool();
     expect(painter().notes, hasLength(3));
 
     // Lines snap to the 5 mm grid, so click where they actually ended up.
@@ -156,5 +156,72 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.delete);
     await tester.pumpAndSettle();
     expect(painter().notes, hasLength(1));
+  });
+
+  testWidgets('a draw tool stays armed for several shapes and each stays selected as drawn until Esc; leaving the canvas ends a drag', (tester) async {
+    tester.view.physicalSize = const Size(1600, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final onError = FlutterError.onError;
+    FlutterError.onError = (details) {
+      if (details.toString().contains('overflowed')) return;
+      onError!(details);
+    };
+    addTearDown(() => FlutterError.onError = onError);
+
+    await tester.pumpWidget(const MaterialApp(home: TemplateMakerScreen()));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byType(DropdownButtonFormField<TemplateCategory>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('controller').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Drawing'));
+    await tester.pumpAndSettle();
+
+    final canvas = find.byWidgetPredicate((w) => w is CustomPaint && w.painter is TemplateOutlinePainter);
+    TemplateOutlinePainter painter() => tester.widget<CustomPaint>(canvas).painter! as TemplateOutlinePainter;
+    final center = tester.getCenter(canvas);
+
+    Future<void> drag(Offset from, Offset to) async {
+      final g = await tester.startGesture(from, kind: PointerDeviceKind.mouse);
+      await g.moveBy(const Offset(6, 0));
+      await g.moveTo(to);
+      await g.up();
+      await tester.pumpAndSettle();
+    }
+
+    // The tool stays armed: two drags draw two lines, and the latest is selected.
+    await tester.tap(find.byIcon(Icons.horizontal_rule));
+    await tester.pumpAndSettle();
+    await drag(center + const Offset(-60, -100), center + const Offset(60, -100));
+    expect(painter().notes, hasLength(1));
+    expect(painter().selectedNoteIds, hasLength(1));
+    await drag(center + const Offset(-60, 100), center + const Offset(60, 100));
+    expect(painter().notes, hasLength(2));
+    expect(painter().selectedNoteIds, hasLength(1));
+
+    // Esc disarms the tool: the next drag is a selection box, not a third line.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await drag(center + const Offset(-200, 40), center + const Offset(200, 160));
+    expect(painter().notes, hasLength(2));
+
+    // Dragging a selection box out of the canvas (e.g. off the window) ends it,
+    // even if no pointer-up ever comes.
+    final g = await tester.startGesture(center + const Offset(-200, 160), kind: PointerDeviceKind.mouse);
+    await g.moveBy(const Offset(10, -10));
+    await g.moveTo(center + const Offset(200, -200));
+    await tester.pump();
+    expect(painter().selectionRectMm, isNotNull);
+    await g.moveTo(const Offset(20, 500)); // over the side panel: still dragging
+    await tester.pump();
+    expect(painter().selectionRectMm, isNotNull);
+    await g.moveTo(center + const Offset(300, 0)); // back into the canvas
+    await tester.pump();
+    await g.moveTo(const Offset(1700, 500)); // off the window
+    await tester.pump();
+    expect(painter().selectionRectMm, isNull);
+    await g.up();
+    await tester.pumpAndSettle();
   });
 }

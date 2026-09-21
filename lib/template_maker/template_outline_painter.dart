@@ -119,6 +119,16 @@ class TemplateOutlinePainter extends CustomPainter {
 
     Offset toPx(Vec2 p) => Offset(originX + (p.x - view.left) * scale, originY + (view.bottom - p.y) * scale);
 
+    // Everything the canvas shows, in mm (top = min Y, bottom = max Y): the view
+    // only frames the plate, so the canvas is wider or taller than it. The grid
+    // and guide lines run across all of it.
+    final visible = Rect.fromLTRB(
+      view.left - originX / scale,
+      view.bottom - (size.height - originY) / scale,
+      view.left + (size.width - originX) / scale,
+      view.bottom + originY / scale,
+    );
+
     final img = image;
     if (img != null && imageRectMm.width > 0 && imageRectMm.height > 0) {
       final dst = Rect.fromPoints(
@@ -140,7 +150,7 @@ class TemplateOutlinePainter extends CustomPainter {
       }
     }
 
-    if (showGrid) _paintGrid(canvas, toPx, scale, view);
+    if (showGrid) _paintGrid(canvas, toPx, scale, visible);
     if (!drawingMode && ghostNotes) _paintNotes(canvas, toPx, scale, ghost: true);
 
     final outlinePaint = Paint()
@@ -200,7 +210,7 @@ class TemplateOutlinePainter extends CustomPainter {
     if (drawingMode) _paintNotes(canvas, toPx, scale);
     _paintHandles(canvas, toPx, drawingMode ? noteHandles : holeHandles);
     if (drawingMode) _paintSelectionRect(canvas, toPx);
-    _paintGuides(canvas, toPx, view);
+    _paintGuides(canvas, toPx, visible);
     _paintMeasure(canvas, toPx);
   }
 
@@ -232,7 +242,7 @@ class TemplateOutlinePainter extends CustomPainter {
   }
 
   void _paintGrid(Canvas canvas, Offset Function(Vec2) toPx, double scale, Rect view) {
-    // The view Rect is built as (left, minY, right, maxY): top = min Y, bottom = max Y.
+    // [view] is the visible region as (left, minY, right, maxY): top = min Y, bottom = max Y.
     final minY = view.top, maxY = view.bottom;
     if (gridMm <= 0) return;
     final stepPx = gridMm * scale;

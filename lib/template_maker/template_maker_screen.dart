@@ -76,6 +76,15 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   /// The note being created by the current draw-tool drag.
   String? _creatingNoteId;
 
+  /// Canvas zoom (1 = the whole plate fits) and how far the view centre has
+  /// been panned from the plate's centre, in mm.
+  /// The canvas size from the latest layout, for keyboard zoom.
+  Size? _canvasSize;
+
+  double _zoom = 1;
+  Vec2 _panMm = const Vec2(0, 0);
+  static const double _minZoom = 0.25, _maxZoom = 40;
+
   /// A drag-selection box being dragged on empty canvas (template mm), and
   /// the notes that were already selected when it started (kept when the
   /// box is dragged with Shift/Ctrl held).
@@ -321,6 +330,17 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   Rect _currentView() {
     final frozen = _frozenView;
     if (frozen != null) return frozen;
+    final base = _baseView();
+    if (_zoom == 1 && _panMm.x == 0 && _panMm.y == 0) return base;
+    return Rect.fromCenter(
+      center: base.center + Offset(_panMm.x, _panMm.y),
+      width: base.width / _zoom,
+      height: base.height / _zoom,
+    );
+  }
+
+  /// The whole-plate framing at zoom 1 (see [_currentView]).
+  Rect _baseView() {
     final c = _controller;
     var left = 0.0, bottom = 0.0, right = c.outlineWidth, top = c.outlineHeight;
     if (c.refImage != null) {
@@ -333,6 +353,30 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     // still be seen and grabbed.
     final pad = math.max(_offPlateMinMm, _offPlateFraction * math.max(right - left, top - bottom));
     return Rect.fromLTRB(left - pad, bottom - pad, right + pad, top + pad);
+  }
+
+  /// Zooms by [factor] keeping the mm point under [anchorPx] (canvas-local
+  /// pixels) where it is -- the cursor for the wheel, the centre for buttons.
+  void _zoomBy(double factor, Offset anchorPx, Size size) {
+    final newZoom = (_zoom * factor).clamp(_minZoom, _maxZoom).toDouble();
+    if (newZoom == _zoom) return;
+    final before = _previewPxToMm(anchorPx, size);
+    setState(() {
+      _zoom = newZoom;
+      final after = _previewPxToMm(anchorPx, size);
+      _panMm = Vec2(_panMm.x + before.x - after.x, _panMm.y + before.y - after.y);
+    });
+  }
+
+  void _zoomFit() => setState(() {
+        _zoom = 1;
+        _panMm = const Vec2(0, 0);
+      });
+
+  /// Pans the view by a pointer movement of [deltaPx] (the content follows the mouse).
+  void _panViewBy(Offset deltaPx, Size size) {
+    final scale = _previewScale(size);
+    setState(() => _panMm = Vec2(_panMm.x - deltaPx.dx / scale, _panMm.y + deltaPx.dy / scale));
   }
 
   double _previewScale(Size size) {
@@ -718,7 +762,20 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     });
   }
 
-  void _onPreviewPanEnd(DragEndDetails details) {
+  bool get _dragActive =>
+      _marqueeStart != null ||
+      _draggingNoteId != null ||
+      _draggingHoleId != null ||
+      _creatingNoteId != null ||
+      _imageDrag != _ImageDrag.none;
+
+  void _onPreviewPanEnd(DragEndDetails details) => _finishDrag();
+
+  /// Ends whatever canvas drag is in progress. Also used when the gesture is
+  /// cancelled or the pointer leaves the canvas (e.g. off the window), where
+  /// no pointer-up may ever arrive: without it the drag would stay "on" and
+  /// keep following the mouse.
+  void _finishDrag() {
     final creatingId = _creatingNoteId;
     if (creatingId != null) {
       _creatingNoteId = null;
@@ -1050,6 +1107,12 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final keyboard = HardwareKeyboard.instance;
+    if (event.logicalKey == LogicalKeyboardKey.escape && (_drawTool != null || _dragActive)) {
+      // Escape stops drawing: cancels a drag in progress and disarms the tool.
+      if (_dragActive) _finishDrag();
+      setState(() => _drawTool = null);
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
       if (_typingInTextField || _controller.measureMode || !_controller.canCopy) return KeyEventResult.ignored;
       setState(() {
@@ -1063,6 +1126,23 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     }
     if (!(keyboard.isControlPressed || keyboard.isMetaPressed) || keyboard.isAltPressed) return KeyEventResult.ignored;
     if (_typingInTextField) return KeyEventResult.ignored;
+    final zoomSize = _canvasSize;
+    if (zoomSize != null) {
+      final key = event.logicalKey;
+      final centre = Offset(zoomSize.width / 2, zoomSize.height / 2);
+      if (key == LogicalKeyboardKey.equal || key == LogicalKeyboardKey.add || key == LogicalKeyboardKey.numpadAdd) {
+        _zoomBy(1.25, centre, zoomSize);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.minus || key == LogicalKeyboardKey.numpadSubtract) {
+        _zoomBy(1 / 1.25, centre, zoomSize);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0) {
+        _zoomFit();
+        return KeyEventResult.handled;
+      }
+    }
     if (event.logicalKey == LogicalKeyboardKey.keyA) {
       if (_controller.layer != TemplateMakerLayer.drawing || _controller.notes.isEmpty) return KeyEventResult.ignored;
       setState(_controller.selectAllNotes);
@@ -1510,16 +1590,39 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   final size = constraints.biggest;
+                  _canvasSize = size;
                   return AnimatedBuilder(
                     animation: _controller,
                     builder: (context, _) => Stack(children: [
-                      MouseRegion(
+                      Listener(
+                        // Wheel zooms about the cursor; middle- or right-drag pans (the
+                        // primary button is left to drawing and selecting).
+                        onPointerSignal: (event) {
+                          if (event is PointerScrollEvent) {
+                            _zoomBy(math.pow(1.0015, -event.scrollDelta.dy).toDouble(), event.localPosition, size);
+                          }
+                        },
+                        onPointerMove: (event) {
+                          if (event.buttons & (kMiddleMouseButton | kSecondaryMouseButton) != 0) {
+                            _panViewBy(event.delta, size);
+                          }
+                        },
+                        child: MouseRegion(
                       cursor: _controller.measureMode || (_drawTool != null && _controller.layer == TemplateMakerLayer.drawing)
                           ? SystemMouseCursors.precise
                           : MouseCursor.defer,
                       onHover: (event) => _onPreviewHover(event, size),
-                      onExit: (_) {
-                        if (_measureHover != null) setState(() => _measureHover = null);
+                      onExit: (event) {
+                        // Leaving the window mid-drag can lose the mouse-up, so end the
+                        // drag there; moving onto the side panel keeps dragging.
+                        final window = MediaQuery.sizeOf(context);
+                        final p = event.position;
+                        final leftWindow = p.dx <= 2 || p.dy <= 2 || p.dx >= window.width - 2 || p.dy >= window.height - 2;
+                        if (_dragActive && leftWindow) {
+                          _finishDrag();
+                        } else if (_measureHover != null) {
+                          setState(() => _measureHover = null);
+                        }
                       },
                       child: GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -1532,7 +1635,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                       onPanStart: (details) => _onPreviewPanStart(details, size),
                       onPanUpdate: (details) => _onPreviewPanUpdate(details, size),
                       onPanEnd: _onPreviewPanEnd,
-                      child: CustomPaint(
+                      onPanCancel: _finishDrag,
+                      child: ClipRect(
+                        child: CustomPaint(
                         painter: TemplateOutlinePainter(
                           viewRectMm: _currentView(),
                           drawingMode: _controller.layer == TemplateMakerLayer.drawing,
@@ -1589,8 +1694,15 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                         ),
                         size: size,
                       ),
+                      ),
                     ),
                     ),
+                      ),
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: _zoomControls(size),
+                      ),
                       if (_editingNoteId != null && _controller.layer == TemplateMakerLayer.drawing)
                         for (final n in _controller.notes.where((n) => n.id == _editingNoteId))
                           _canvasTextEditor(size, n),
@@ -1599,6 +1711,38 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                 },
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _zoomControls(Size size) {
+    final centre = Offset(size.width / 2, size.height / 2);
+    return Material(
+      elevation: 2,
+      borderRadius: BorderRadius.circular(8),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.remove, size: 20),
+            tooltip: 'Zoom out (Ctrl -)',
+            onPressed: () => _zoomBy(1 / 1.25, centre, size),
+          ),
+          SizedBox(
+            width: 48,
+            child: Text('${(_zoom * 100).round()}%', textAlign: TextAlign.center, style: Theme.of(context).textTheme.labelMedium),
+          ),
+          IconButton(
+            icon: const Icon(Icons.add, size: 20),
+            tooltip: 'Zoom in (Ctrl +)',
+            onPressed: () => _zoomBy(1.25, centre, size),
+          ),
+          IconButton(
+            icon: const Icon(Icons.fit_screen, size: 20),
+            tooltip: 'Fit the plate (Ctrl 0). Scroll wheel zooms at the cursor; middle- or right-drag pans.',
+            onPressed: _zoomFit,
           ),
         ],
       ),
@@ -1844,7 +1988,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: Text(
-            'Drag on the canvas to draw. Click the highlighted tool again to go back to selecting and moving.',
+            'Drag on the canvas to draw. Esc, or clicking the highlighted tool again, goes back to selecting and moving.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
