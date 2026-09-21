@@ -71,6 +71,27 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   /// The note being created by the current draw-tool drag.
   String? _creatingNoteId;
 
+  /// The text note being edited in place on the canvas (double-click), the
+  /// text it had before, and the field that edits it.
+  String? _editingNoteId;
+  String _editingOriginalText = '';
+  final _canvasTextController = TextEditingController();
+  late final FocusNode _canvasTextFocus = FocusNode(
+    debugLabel: 'canvas text edit',
+    onKeyEvent: (node, event) {
+      if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.escape) {
+        _endTextEdit(cancel: true);
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    },
+  );
+
+  /// The previous canvas tap, to recognise a double-click without a
+  /// double-tap recognizer (which would delay every single tap).
+  DateTime _lastTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  String? _lastTapNoteId;
+
   /// The handle of the selected note being dragged (resize / move an end), and
   /// for a rectangle the corner that stays put.
   NoteHandle? _noteHandle;
@@ -200,6 +221,8 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       c.dispose();
     }
     _keyFocus.dispose();
+    _canvasTextController.dispose();
+    _canvasTextFocus.dispose();
     for (final f in [
       ..._holeXFocus.values,
       ..._holeYFocus.values,
@@ -350,6 +373,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         _noteHandle = switch (tool) {
           AnnotationType.line => NoteHandle.end,
           AnnotationType.circle => NoteHandle.radius,
+          AnnotationType.text => NoteHandle.textSize,
           _ => NoteHandle.cornerNE,
         };
         _noteHandleFixed = start;
@@ -438,6 +462,84 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     setState(() => _controller.placeMeasurePoint(_snapForMeasure(details.localPosition, size)));
   }
 
+  void _beginTextEdit(TemplateMakerNote note) {
+    setState(() {
+      _editingNoteId = note.id;
+      _editingOriginalText = note.text;
+      _canvasTextController.text = note.text;
+      _canvasTextController.selection = TextSelection(baseOffset: 0, extentOffset: note.text.length);
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _canvasTextFocus.requestFocus());
+  }
+
+  /// Finishes the in-canvas text edit: keeps the typed text, or with [cancel]
+  /// restores the original. A note left empty would be invisible, so it is removed.
+  void _endTextEdit({bool cancel = false}) {
+    final id = _editingNoteId;
+    if (id == null) return;
+    _editingNoteId = null;
+    final note = _controller.notes.where((n) => n.id == id).firstOrNull;
+    setState(() {
+      if (note != null) {
+        _controller.updateNote(id, text: cancel ? _editingOriginalText : _canvasTextController.text);
+        if (note.text.isEmpty) {
+          _controller.removeNote(id);
+        } else {
+          _noteFields['$id/text']?.text = note.text;
+        }
+      }
+    });
+    // Once the editor is gone, hand focus back so Delete/Ctrl+C work again
+    // (unless the click that ended the edit landed in another text field).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_typingInTextField) _keyFocus.requestFocus();
+    });
+  }
+
+  Widget _canvasTextEditor(Size size, TemplateMakerNote note) {
+    final scale = _previewScale(size);
+    final origin = _previewOrigin(size, scale);
+    final view = _currentView();
+    final anchor = Offset(origin.dx + (note.x - view.left) * scale, origin.dy + (view.bottom - note.y) * scale);
+    final style = TextStyle(
+      fontSize: math.max(note.height * scale, 4),
+      color: Colors.lightBlue,
+    );
+    return Positioned(
+      left: anchor.dx,
+      bottom: size.height - anchor.dy,
+      child: Transform.rotate(
+        angle: -note.rotationDeg * math.pi / 180,
+        alignment: Alignment.bottomLeft,
+        child: IntrinsicWidth(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minWidth: 40),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: canvasBackground(context),
+                border: Border.all(color: Colors.lightBlue),
+              ),
+              child: EditableText(
+                controller: _canvasTextController,
+                focusNode: _canvasTextFocus,
+                style: style,
+                cursorColor: Colors.lightBlue,
+                backgroundCursorColor: Colors.grey,
+                selectionColor: Colors.lightBlue.withValues(alpha: 0.3),
+                onChanged: (v) => setState(() {
+                  _controller.updateNote(note.id, text: v);
+                  _noteFields['${note.id}/text']?.text = v;
+                }),
+                onSubmitted: (_) => _endTextEdit(),
+                onTapOutside: (_) => _endTextEdit(),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   void _onPreviewHover(PointerHoverEvent event, Size size) {
     if (!_controller.measureMode) return;
     setState(() => _measureHover = _snapForMeasure(event.localPosition, size));
@@ -447,7 +549,14 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     if (_controller.measureMode) return;
     if (_controller.layer == TemplateMakerLayer.drawing) {
       final hit = _noteAt(_previewPxToMm(details.localPosition, size), _previewScale(size));
+      final now = DateTime.now();
+      final doubleClick = hit != null &&
+          hit.id == _lastTapNoteId &&
+          now.difference(_lastTapAt) < const Duration(milliseconds: 400);
+      _lastTapAt = now;
+      _lastTapNoteId = hit?.id;
       setState(() => _controller.selectNote(hit?.id));
+      if (doubleClick && _drawTool == null && hit.type == AnnotationType.text) _beginTextEdit(hit);
       return;
     }
     final hit = _holeNear(_previewPxToMm(details.localPosition, size), _previewScale(size));
@@ -466,6 +575,12 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       if (handle != null) {
         final raw = _previewPxToMm(details.localPosition, size);
         setState(() {
+          if (id == _creatingNoteId && handle == NoteHandle.textSize) {
+            // Drawing a text box: both corners are positions, so snap them.
+            _controller.dragNoteTextBox(id, _noteHandleFixed!, _snapDrag(raw, size, excludeNoteId: id));
+            _refreshNoteFields();
+            return;
+          }
           // A text note's size isn't a position worth snapping to the grid.
           final target = handle == NoteHandle.textSize ? raw : _snapDrag(raw, size, excludeNoteId: id);
           _controller.dragNoteHandle(id, handle, target, fixed: _noteHandleFixed);
@@ -528,7 +643,8 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
           switch (n.type) {
             AnnotationType.line => math.sqrt(math.pow(n.x2 - n.x, 2) + math.pow(n.y2 - n.y, 2)) < 0.5,
             AnnotationType.rect => n.width < 0.5 && n.height < 0.5,
-            _ => n.radius < 0.5,
+            AnnotationType.text => n.height <= 0.5,
+            AnnotationType.circle => n.radius < 0.5,
           };
       if (n != null && tiny) _controller.removeNote(creatingId);
     }
@@ -1305,7 +1421,8 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                   final size = constraints.biggest;
                   return AnimatedBuilder(
                     animation: _controller,
-                    builder: (context, _) => MouseRegion(
+                    builder: (context, _) => Stack(children: [
+                      MouseRegion(
                       cursor: _controller.measureMode || (_drawTool != null && _controller.layer == TemplateMakerLayer.drawing)
                           ? SystemMouseCursors.precise
                           : MouseCursor.defer,
@@ -1376,6 +1493,10 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                       ),
                     ),
                     ),
+                      if (_editingNoteId != null && _controller.layer == TemplateMakerLayer.drawing)
+                        for (final n in _controller.notes.where((n) => n.id == _editingNoteId))
+                          _canvasTextEditor(size, n),
+                    ]),
                   );
                 },
               ),
@@ -1403,6 +1524,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
           ],
           selected: {c.layer},
           onSelectionChanged: (selection) => setState(() {
+            _endTextEdit();
             _drawTool = null;
             c.selectLayer(selection.first);
             _syncHoleControllers();
@@ -1591,7 +1713,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         spacing: 8,
         runSpacing: 4,
         children: [
-          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.text)), icon: const Icon(Icons.text_fields, size: 18), label: const Text('Text')),
+          drawTool(AnnotationType.text, Icons.text_fields, 'Text'),
           drawTool(AnnotationType.line, Icons.horizontal_rule, 'Line'),
           drawTool(AnnotationType.rect, Icons.crop_square, 'Rectangle'),
           drawTool(AnnotationType.circle, Icons.circle_outlined, 'Circle'),

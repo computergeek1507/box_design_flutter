@@ -902,13 +902,14 @@ class TemplateMakerController extends ChangeNotifier {
     return note;
   }
 
-  /// Adds a zero-size line/rect/circle note anchored at [p] (a line's start,
-  /// a rectangle's corner, a circle's centre) and selects it, ready to be
-  /// sized by dragging a handle.
+  /// Adds a zero-size note anchored at [p] (a line's start, a rectangle's or
+  /// text box's corner, a circle's centre) and selects it, ready to be sized
+  /// by dragging a handle.
   TemplateMakerNote addNoteAt(AnnotationType type, Vec2 p) {
     final note = TemplateMakerNote(
       id: 'note${_nextNoteSeq++}',
       type: type,
+      text: type == AnnotationType.text ? 'Text' : '',
       x: p.x,
       y: p.y,
       x2: p.x,
@@ -1093,6 +1094,20 @@ class TemplateMakerController extends ChangeNotifier {
         final local = mm.subtract(Vec2(n.x, n.y)).rotated(-n.rotationDeg);
         n.height = math.max(local.x / (math.max(n.text.length, 1) * 0.6), _minTextHeightMm);
     }
+    notifyListeners();
+  }
+
+  /// Sizes a text note to a box dragged from [anchor] to [mm]: the text sits
+  /// at the box's bottom-left and is as tall as fits inside it (limited by the
+  /// box height and by its estimated width, see [noteTextWidthMm]).
+  void dragNoteTextBox(String noteId, Vec2 anchor, Vec2 mm) {
+    final n = notes.where((e) => e.id == noteId).firstOrNull;
+    if (n == null || n.type != AnnotationType.text) return;
+    final w = (mm.x - anchor.x).abs(), h = (mm.y - anchor.y).abs();
+    n.x = math.min(mm.x, anchor.x);
+    n.y = math.min(mm.y, anchor.y);
+    n.rotationDeg = 0;
+    n.height = math.max(math.min(h, w / (math.max(n.text.length, 1) * 0.6)), _minTextHeightMm);
     notifyListeners();
   }
 
