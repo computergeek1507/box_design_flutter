@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../dxf/dxf_parser.dart';
@@ -62,7 +63,26 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   Rect? _frozenView;
   Vec2? _measureHover;
   String? _draggingNoteId;
+
+  /// The handle of the selected note being dragged (resize / move an end), and
+  /// for a rectangle the corner that stays put.
+  NoteHandle? _noteHandle;
+
+  /// Receives Ctrl/Cmd+C and Ctrl/Cmd+V for the whole screen (see [_onKey]).
+  final FocusNode _keyFocus = FocusNode(debugLabel: 'template maker shortcuts');
+
+  /// The handle of the selected hole being dragged (resize).
+  HoleHandle? _holeHandle;
+  Vec2? _noteHandleFixed;
   Vec2 _lastNoteMm = const Vec2(0, 0);
+
+  /// Where the dragged note would be with no snapping (its anchor), so
+  /// snapping doesn't lose the pointer's real movement.
+  Vec2 _noteRawAnchor = const Vec2(0, 0);
+
+  /// Alignment guides (template mm) while a drag is snapped to an object.
+  double? _guideX;
+  double? _guideY;
   final Map<String, TextEditingController> _noteFields = {};
   final Map<String, GlobalKey> _holeRowKeys = {};
 
@@ -172,6 +192,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     ]) {
       c.dispose();
     }
+    _keyFocus.dispose();
     for (final f in [
       ..._holeXFocus.values,
       ..._holeYFocus.values,
@@ -313,10 +334,28 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     final mm = _previewPxToMm(details.localPosition, size);
     _imageDrag = _ImageDrag.none;
     if (_controller.layer == TemplateMakerLayer.drawing) {
+      _noteHandle = null;
+      final selected = _controller.notes.where((n) => n.id == _controller.selectedNoteId).firstOrNull;
+      final grabbed = selected == null ? null : _noteHandleAt(selected, mm, scale);
+      if (selected != null && grabbed != null) {
+        _draggingNoteId = selected.id;
+        _noteHandle = grabbed;
+        _noteHandleFixed = _controller.noteRectFixedCorner(selected, grabbed);
+        return;
+      }
       final hit = _noteAt(mm, scale);
       _draggingNoteId = hit?.id;
       _lastNoteMm = mm;
+      _noteRawAnchor = hit == null ? mm : Vec2(hit.x, hit.y);
       setState(() => _controller.selectNote(hit?.id));
+      return;
+    }
+    _holeHandle = null;
+    final selectedHole = _controller.holes.where((h) => h.id == _controller.selectedHoleId).firstOrNull;
+    final grabbed = selectedHole == null ? null : _holeHandleAt(selectedHole, mm, scale);
+    if (selectedHole != null && grabbed != null) {
+      _draggingHoleId = selectedHole.id;
+      _holeHandle = grabbed;
       return;
     }
     _draggingHoleId = _holeNear(mm, scale)?.id;
@@ -355,6 +394,24 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     return _controller.snapMeasurePoint(raw, 10 / _previewScale(size));
   }
 
+  /// Snaps a dragged point (see [TemplateMakerController.snapDragPoint]); holding
+  /// Alt drags freely. Sets the alignment guides shown while dragging.
+  Vec2 _snapDrag(Vec2 raw, Size size, {String? excludeHoleId, String? excludeNoteId}) {
+    if (HardwareKeyboard.instance.isAltPressed) {
+      _guideX = _guideY = null;
+      return raw;
+    }
+    final r = _controller.snapDragPoint(
+      raw,
+      excludeHoleId: excludeHoleId,
+      excludeNoteId: excludeNoteId,
+      toleranceMm: 8 / _previewScale(size),
+    );
+    _guideX = r.guideX;
+    _guideY = r.guideY;
+    return r.point;
+  }
+
   void _onPreviewTapUp(TapUpDetails details, Size size) {
     if (!_controller.measureMode) return;
     setState(() => _controller.placeMeasurePoint(_snapForMeasure(details.localPosition, size)));
@@ -384,12 +441,26 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     if (_controller.layer == TemplateMakerLayer.drawing) {
       final id = _draggingNoteId;
       if (id == null) return;
+      final handle = _noteHandle;
+      if (handle != null) {
+        final raw = _previewPxToMm(details.localPosition, size);
+        setState(() {
+          // A text note's size isn't a position worth snapping to the grid.
+          final target = handle == NoteHandle.textSize ? raw : _snapDrag(raw, size, excludeNoteId: id);
+          _controller.dragNoteHandle(id, handle, target, fixed: _noteHandleFixed);
+          _refreshNoteFields();
+        });
+        return;
+      }
       final p = _previewPxToMm(details.localPosition, size);
+      _noteRawAnchor = _noteRawAnchor.add(Vec2(p.x - _lastNoteMm.x, p.y - _lastNoteMm.y));
+      _lastNoteMm = p;
+      final note = _controller.notes.firstWhere((n) => n.id == id);
       setState(() {
-        _controller.moveNoteBy(id, p.x - _lastNoteMm.x, p.y - _lastNoteMm.y);
+        final target = _snapDrag(_noteRawAnchor, size, excludeNoteId: id);
+        _controller.moveNoteBy(id, target.x - note.x, target.y - note.y);
         _refreshNoteFields();
       });
-      _lastNoteMm = p;
       return;
     }
     final draggingId = _draggingHoleId;
@@ -406,8 +477,20 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       });
       return;
     }
-    final mm = _previewPxToMm(details.localPosition, size);
+    final holeHandle = _holeHandle;
+    if (holeHandle != null) {
+      setState(() {
+        final mm = _snapDrag(_previewPxToMm(details.localPosition, size), size, excludeHoleId: draggingId);
+        _controller.dragHoleHandle(draggingId, holeHandle, mm);
+        final h = _controller.holes.firstWhere((e) => e.id == draggingId);
+        _holeD[draggingId]?.text = _fmt(h.diameter);
+        _holeLen[draggingId]?.text = _fmt(h.slotLength);
+        _holeWidth[draggingId]?.text = _fmt(h.slotWidth);
+      });
+      return;
+    }
     setState(() {
+      final mm = _snapDrag(_previewPxToMm(details.localPosition, size), size, excludeHoleId: draggingId);
       _controller.updateHole(draggingId, x: mm.x, y: mm.y);
       _holeX[draggingId]?.text = _fmt(mm.x);
       _holeY[draggingId]?.text = _fmt(mm.y);
@@ -416,9 +499,15 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
 
   void _onPreviewPanEnd(DragEndDetails details) {
     _draggingHoleId = null;
+    _holeHandle = null;
     _draggingNoteId = null;
+    _noteHandle = null;
+    _noteHandleFixed = null;
     _imageDrag = _ImageDrag.none;
-    setState(() => _frozenView = null);
+    setState(() {
+      _frozenView = null;
+      _guideX = _guideY = null;
+    });
   }
 
   Future<void> _autoFitImage() async {
@@ -714,6 +803,47 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     });
   }
 
+  /// True while the keyboard focus is in a text field, where Ctrl+C / Ctrl+V
+  /// belong to the text.
+  bool get _typingInTextField {
+    final focused = FocusManager.instance.primaryFocus?.context;
+    if (focused == null) return false;
+    return focused.widget is EditableText || focused.findAncestorWidgetOfExactType<EditableText>() != null;
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final keyboard = HardwareKeyboard.instance;
+    if (!(keyboard.isControlPressed || keyboard.isMetaPressed) || keyboard.isAltPressed) return KeyEventResult.ignored;
+    if (_typingInTextField) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.keyC) {
+      if (!_controller.copySelection()) return KeyEventResult.ignored;
+      _snack('Copied');
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.keyV) {
+      if (!_controller.canPaste) return KeyEventResult.ignored;
+      final id = _controller.paste();
+      if (id == null) return KeyEventResult.ignored;
+      setState(() {
+        _syncHoleControllers();
+        _refreshTopFields();
+        _refreshNoteFields();
+      });
+      if (_controller.layer != TemplateMakerLayer.drawing) _selectHoleFromPreview(id);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  void _addRect() {
+    setState(() {
+      _controller.addRect();
+      _syncHoleControllers();
+      _refreshTopFields();
+    });
+  }
+
   void _addSlot() {
     setState(() {
       _controller.addSlot();
@@ -827,8 +957,49 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     }
   }
 
+  Widget _gridMenu() {
+    final c = _controller;
+    String fmt(double v) => v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
+    return PopupMenuButton<VoidCallback>(
+      tooltip: 'Grid and snapping (hold Alt while dragging to move freely)',
+      onSelected: (action) => setState(action),
+      itemBuilder: (_) => [
+        CheckedPopupMenuItem(value: () => c.setShowGrid(!c.showGrid), checked: c.showGrid, child: const Text('Show grid')),
+        CheckedPopupMenuItem(value: () => c.setSnapToGrid(!c.snapToGrid), checked: c.snapToGrid, child: const Text('Snap to grid')),
+        CheckedPopupMenuItem(
+          value: () => c.setSnapToObjects(!c.snapToObjects),
+          checked: c.snapToObjects,
+          child: const Text('Snap to edges, centres and other items'),
+        ),
+        const PopupMenuDivider(),
+        for (final size in TemplateMakerController.gridSizesMm)
+          CheckedPopupMenuItem(value: () => c.setGridMm(size), checked: c.gridMm == size, child: Text('Grid ${fmt(size)} mm')),
+      ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(c.showGrid ? Icons.grid_on : Icons.grid_off, size: 18),
+            const SizedBox(width: 8),
+            Text(c.snapToGrid || c.snapToObjects ? 'Grid · snap' : 'Grid'),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _keyFocus,
+      autofocus: true,
+      onKeyEvent: _onKey,
+      child: _scaffold(context),
+    );
+  }
+
+  Widget _scaffold(BuildContext context) {
     _syncHoleControllers();
     return Scaffold(
       appBar: AppBar(
@@ -848,6 +1019,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                   icon: const Icon(Icons.straighten, size: 18),
                   label: const Text('Measure'),
                 ),
+          _gridMenu(),
           TextButton.icon(onPressed: _newTemplate, icon: const Icon(Icons.add), label: const Text('New')),
           TextButton.icon(onPressed: _loadJson, icon: const Icon(Icons.folder_open), label: const Text('Load JSON')),
           TextButton.icon(onPressed: _loadDxf, icon: const Icon(Icons.folder_open), label: const Text('Load DXF')),
@@ -1032,6 +1204,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                       children: [
                         IconButton(onPressed: _addHole, icon: const Icon(Icons.add_circle_outline), tooltip: 'Add round hole'),
                         IconButton(onPressed: _addSlot, icon: const Icon(Icons.crop_7_5), tooltip: 'Add slot'),
+                        IconButton(onPressed: _addRect, icon: const Icon(Icons.crop_square), tooltip: 'Add rectangle'),
                         IconButton(onPressed: _showQuickHoleDialog, icon: const Icon(Icons.grid_4x4), tooltip: 'Quick 4-hole pattern'),
                       ],
                     ),
@@ -1097,6 +1270,10 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                       behavior: HitTestBehavior.opaque,
                       onTapDown: (details) => _onPreviewTapDown(details, size),
                       onTapUp: (details) => _onPreviewTapUp(details, size),
+                      // Report the drag from where the pointer went down, not from where it
+                      // already is after the first move: otherwise a quick drag starting on a
+                      // small handle or hole has moved off it before we look for what was grabbed.
+                      dragStartBehavior: DragStartBehavior.down,
                       onPanStart: (details) => _onPreviewPanStart(details, size),
                       onPanUpdate: (details) => _onPreviewPanUpdate(details, size),
                       onPanEnd: _onPreviewPanEnd,
@@ -1106,7 +1283,23 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                           drawingMode: _controller.layer == TemplateMakerLayer.drawing,
                           notes: _controller.notes,
                           selectedNoteId: _controller.selectedNoteId,
+                          holeHandles: () {
+                            final h = _controller.holes.where((e) => e.id == _controller.selectedHoleId).firstOrNull;
+                            return h == null || _controller.layer == TemplateMakerLayer.drawing
+                                ? const <Vec2>[]
+                                : [for (final handle in _controller.holeHandles(h)) handle.point];
+                          }(),
+                          noteHandles: () {
+                            final n = _controller.notes.where((e) => e.id == _controller.selectedNoteId).firstOrNull;
+                            return n == null || _controller.layer != TemplateMakerLayer.drawing
+                                ? const <Vec2>[]
+                                : [for (final h in _controller.noteHandles(n)) h.point];
+                          }(),
                           ghostNotes: _controller.layer != TemplateMakerLayer.drawing,
+                          showGrid: _controller.showGrid,
+                          gridMm: _controller.gridMm,
+                          guideX: _guideX,
+                          guideY: _guideY,
                           isDark: Theme.of(context).brightness == Brightness.dark,
                           measureStart: _controller.measureStart,
                           measureEnd: _controller.measureEnd,
@@ -1186,13 +1379,45 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     );
   }
 
+  /// The handle of [h] under [mm], if any (the nearest when several are close).
+  HoleHandle? _holeHandleAt(TemplateMakerHole h, Vec2 mm, double scale) {
+    final tol = 10 / scale;
+    HoleHandle? best;
+    var bestDist = double.infinity;
+    for (final handle in _controller.holeHandles(h)) {
+      final dx = handle.point.x - mm.x, dy = handle.point.y - mm.y;
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d <= tol && d < bestDist) {
+        bestDist = d;
+        best = handle.handle;
+      }
+    }
+    return best;
+  }
+
+  /// The handle of [n] under [mm], if any (the nearest when several are close).
+  NoteHandle? _noteHandleAt(TemplateMakerNote n, Vec2 mm, double scale) {
+    final tol = 10 / scale;
+    NoteHandle? best;
+    var bestDist = double.infinity;
+    for (final h in _controller.noteHandles(n)) {
+      final dx = h.point.x - mm.x, dy = h.point.y - mm.y;
+      final d = math.sqrt(dx * dx + dy * dy);
+      if (d <= tol && d < bestDist) {
+        bestDist = d;
+        best = h.handle;
+      }
+    }
+    return best;
+  }
+
   TemplateMakerNote? _noteAt(Vec2 mm, double scale) {
     final tol = 10 / scale;
     for (final n in _controller.notes.reversed) {
       final hit = switch (n.type) {
         AnnotationType.text => () {
             final local = mm.subtract(Vec2(n.x, n.y)).rotated(-n.rotationDeg);
-            final w = math.max(n.text.length, 1) * n.height * 0.6;
+            final w = noteTextWidthMm(n);
             return local.x >= -tol && local.x <= w + tol && local.y >= -tol && local.y <= n.height + tol;
           }(),
         AnnotationType.line => _distToSegment(mm, Vec2(n.x, n.y), Vec2(n.x2, n.y2)) <= tol,

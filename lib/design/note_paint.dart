@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 
 import '../models/annotation.dart';
 
-/// Colour used for drawing-layer notes (distinct from cut geometry).
-Color noteColor({required bool isDark}) => isDark ? Colors.orangeAccent.shade100 : Colors.deepOrange.shade600;
+/// Colour used for drawing-layer notes (distinct from cut geometry). Teal in
+/// light mode: the orange it used to be read as much the same as the red holes.
+Color noteColor({required bool isDark}) => isDark ? Colors.orangeAccent.shade100 : Colors.teal.shade700;
 
 /// Paints [text] with its bottom-left at [anchorPx] (screen px), rotated
 /// counter-clockwise by the note's own angle, sized so a letter is about

@@ -47,9 +47,23 @@ class TemplateOutlinePainter extends CustomPainter {
   final List<TemplateMakerNote> notes;
   final String? selectedNoteId;
 
+  /// Drag handles of the selected note (template mm), drawn in drawing mode.
+  final List<Vec2> noteHandles;
+
+  /// Drag handles of the selected hole/slot/rectangle (template mm).
+  final List<Vec2> holeHandles;
+
   /// Outside drawing mode, draw the [notes] dimmed underneath the holes as a
   /// reference (never selected, never hit-tested).
   final bool ghostNotes;
+
+  /// Grid lines every [gridMm] (major line every fifth), anchored at (0, 0),
+  /// and the alignment guides ([guideX]/[guideY], template mm) shown while a
+  /// dragged item is snapped to another object.
+  final bool showGrid;
+  final double gridMm;
+  final double? guideX;
+  final double? guideY;
 
   /// Measurement overlay (template mm); [measureHover] is the snap target
   /// under the cursor while measuring.
@@ -63,7 +77,13 @@ class TemplateOutlinePainter extends CustomPainter {
     this.drawingMode = false,
     this.notes = const [],
     this.selectedNoteId,
+    this.noteHandles = const [],
+    this.holeHandles = const [],
     this.ghostNotes = false,
+    this.showGrid = false,
+    this.gridMm = 5,
+    this.guideX,
+    this.guideY,
     this.measureStart,
     this.measureEnd,
     this.measureHover,
@@ -112,6 +132,7 @@ class TemplateOutlinePainter extends CustomPainter {
       }
     }
 
+    if (showGrid) _paintGrid(canvas, toPx, scale, view);
     if (!drawingMode && ghostNotes) _paintNotes(canvas, toPx, scale, ghost: true);
 
     final outlinePaint = Paint()
@@ -169,7 +190,63 @@ class TemplateOutlinePainter extends CustomPainter {
     }
 
     if (drawingMode) _paintNotes(canvas, toPx, scale);
+    _paintHandles(canvas, toPx, drawingMode ? noteHandles : holeHandles);
+    _paintGuides(canvas, toPx, view);
     _paintMeasure(canvas, toPx);
+  }
+
+  void _paintHandles(Canvas canvas, Offset Function(Vec2) toPx, List<Vec2> handles) {
+    final fill = Paint()..color = isDark ? Colors.black : Colors.white;
+    final border = Paint()
+      ..color = Colors.lightBlue
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    for (final h in handles) {
+      final r = Rect.fromCenter(center: toPx(h), width: 9, height: 9);
+      canvas.drawRect(r, fill);
+      canvas.drawRect(r, border);
+    }
+  }
+
+  void _paintGrid(Canvas canvas, Offset Function(Vec2) toPx, double scale, Rect view) {
+    // The view Rect is built as (left, minY, right, maxY): top = min Y, bottom = max Y.
+    final minY = view.top, maxY = view.bottom;
+    if (gridMm <= 0) return;
+    final stepPx = gridMm * scale;
+    // Too dense to read: thin it to the major lines, or drop it altogether.
+    if (stepPx * 5 < 6) return;
+    final drawMinor = stepPx >= 5;
+    final base = isDark ? Colors.white : Colors.black;
+    final minor = Paint()
+      ..color = base.withValues(alpha: 0.10)
+      ..strokeWidth = 1;
+    final major = Paint()
+      ..color = base.withValues(alpha: 0.22)
+      ..strokeWidth = 1;
+    final firstX = (view.left / gridMm).ceil(), lastX = (view.right / gridMm).floor();
+    final firstY = (minY / gridMm).ceil(), lastY = (maxY / gridMm).floor();
+    for (var i = firstX; i <= lastX; i++) {
+      final isMajor = i % 5 == 0;
+      if (!isMajor && !drawMinor) continue;
+      final x = i * gridMm;
+      canvas.drawLine(toPx(Vec2(x, minY)), toPx(Vec2(x, maxY)), isMajor ? major : minor);
+    }
+    for (var j = firstY; j <= lastY; j++) {
+      final isMajor = j % 5 == 0;
+      if (!isMajor && !drawMinor) continue;
+      final y = j * gridMm;
+      canvas.drawLine(toPx(Vec2(view.left, y)), toPx(Vec2(view.right, y)), isMajor ? major : minor);
+    }
+  }
+
+  void _paintGuides(Canvas canvas, Offset Function(Vec2) toPx, Rect view) {
+    final minY = view.top, maxY = view.bottom;
+    final paint = Paint()
+      ..color = (isDark ? Colors.pinkAccent.shade100 : Colors.pink).withValues(alpha: 0.85)
+      ..strokeWidth = 1;
+    final gx = guideX, gy = guideY;
+    if (gx != null) canvas.drawLine(toPx(Vec2(gx, minY)), toPx(Vec2(gx, maxY)), paint);
+    if (gy != null) canvas.drawLine(toPx(Vec2(view.left, gy)), toPx(Vec2(view.right, gy)), paint);
   }
 
   void _paintNotes(Canvas canvas, Offset Function(Vec2) toPx, double scale, {bool ghost = false}) {
@@ -264,6 +341,10 @@ class TemplateOutlinePainter extends CustomPainter {
     return oldDelegate.drawingMode != drawingMode ||
         oldDelegate.selectedNoteId != selectedNoteId ||
         oldDelegate.ghostNotes != ghostNotes ||
+        oldDelegate.showGrid != showGrid ||
+        oldDelegate.gridMm != gridMm ||
+        oldDelegate.guideX != guideX ||
+        oldDelegate.guideY != guideY ||
         oldDelegate.measureStart != measureStart ||
         oldDelegate.measureEnd != measureEnd ||
         oldDelegate.measureHover != measureHover ||

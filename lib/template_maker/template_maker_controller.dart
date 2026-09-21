@@ -110,6 +110,17 @@ class TemplateMakerNote {
 
 /// One plate's worth of outline settings and holes, used to park the plate
 /// that isn't currently being edited.
+/// Which draggable handle of the selected hole/slot/rectangle is grabbed.
+/// Holes resize symmetrically about their centre, in their own (rotated) frame.
+enum HoleHandle { radius, lengthPos, lengthNeg, widthPos, widthNeg, cornerNE, cornerNW, cornerSW, cornerSE }
+
+/// Which draggable handle of the selected drawing-layer note is grabbed.
+enum NoteHandle { start, end, cornerSW, cornerSE, cornerNW, cornerNE, radius, textSize }
+
+/// Estimated width (mm) of a text note: about 0.6 of its height per
+/// character. Used to place its resize handle and to hit-test it.
+double noteTextWidthMm(TemplateMakerNote n) => math.max(n.text.length, 1) * n.height * 0.6;
+
 class _Plate {
   final double outlineWidth;
   final double outlineHeight;
@@ -243,6 +254,85 @@ class TemplateMakerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Grid and drag snapping. The grid is anchored at the plate's (0, 0) corner.
+  static const gridSizesMm = [1.0, 2.0, 5.0, 10.0, 20.0];
+  bool showGrid = true;
+  bool snapToGrid = true;
+
+  /// Snap a dragged point to the plate's edges and centre lines and to other
+  /// holes'/notes' X and Y (alignment), independently per axis.
+  bool snapToObjects = true;
+  double gridMm = 5;
+
+  void setShowGrid(bool value) {
+    showGrid = value;
+    notifyListeners();
+  }
+
+  void setSnapToGrid(bool value) {
+    snapToGrid = value;
+    notifyListeners();
+  }
+
+  void setSnapToObjects(bool value) {
+    snapToObjects = value;
+    notifyListeners();
+  }
+
+  void setGridMm(double value) {
+    if (value <= 0) return;
+    gridMm = value;
+    notifyListeners();
+  }
+
+  /// Snaps a point being dragged, per axis: to an object (plate edge/centre,
+  /// another hole or note) if one is within [toleranceMm], otherwise to the
+  /// grid. [guideX]/[guideY] are set when that axis snapped to an object, so
+  /// the screen can draw an alignment line. Pass the dragged item's id in
+  /// [excludeHoleId]/[excludeNoteId] so it doesn't snap to itself; when
+  /// dragging a note, the other notes are alignment targets too.
+  ({Vec2 point, double? guideX, double? guideY}) snapDragPoint(
+    Vec2 raw, {
+    String? excludeHoleId,
+    String? excludeNoteId,
+    required double toleranceMm,
+  }) {
+    double? objX, objY;
+    if (snapToObjects) {
+      final xs = <double>[0, outlineWidth / 2, outlineWidth];
+      final ys = <double>[0, outlineHeight / 2, outlineHeight];
+      for (final h in holes) {
+        if (h.id == excludeHoleId) continue;
+        xs.add(h.x);
+        ys.add(h.y);
+      }
+      if (excludeNoteId != null) {
+        for (final n in notes) {
+          if (n.id == excludeNoteId) continue;
+          xs.add(n.x);
+          ys.add(n.y);
+        }
+      }
+      double? nearest(List<double> candidates, double v) {
+        double? best;
+        var bestDist = toleranceMm;
+        for (final c in candidates) {
+          final d = (c - v).abs();
+          if (d <= bestDist) {
+            bestDist = d;
+            best = c;
+          }
+        }
+        return best;
+      }
+
+      objX = nearest(xs, raw.x);
+      objY = nearest(ys, raw.y);
+    }
+    double onGrid(double v) => snapToGrid ? double.parse(((v / gridMm).round() * gridMm).toStringAsFixed(6)) : v;
+    return (point: Vec2(objX ?? onGrid(raw.x), objY ?? onGrid(raw.y)), guideX: objX, guideY: objY);
+  }
+
   /// Snaps [raw] (template mm) to a hole/slot center, a slot's rounded-end
   /// center, a point on the outline (edges, corners, fillet centers) or a
   /// corner of the reference image, within [toleranceMm].
@@ -337,6 +427,20 @@ class TemplateMakerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void addRect() {
+    final hole = TemplateMakerHole(
+      id: 'hole${_nextHoleSeq++}',
+      x: outlineWidth / 2,
+      y: outlineHeight / 2,
+      shape: TemplateMakerHoleShape.rect,
+      slotLength: 12,
+      slotWidth: 8,
+    );
+    holes.add(hole);
+    selectedHoleId = hole.id;
+    notifyListeners();
+  }
+
   void addSlot() {
     final hole = TemplateMakerHole(
       id: 'hole${_nextHoleSeq++}',
@@ -393,6 +497,102 @@ class TemplateMakerController extends ChangeNotifier {
     if (selectedHoleId == holeId) selectedHoleId = null;
     notifyListeners();
   }
+
+  /// The copy/paste clipboard. Shared by every Template Maker, so an item can
+  /// be copied out of one template and pasted into another; only one of the two
+  /// is ever set (the last thing copied).
+  static TemplateMakerHole? _clipHole;
+  static TemplateMakerNote? _clipNote;
+
+  @visibleForTesting
+  static void clearClipboard() {
+    _clipHole = null;
+    _clipNote = null;
+  }
+
+  /// Whether there is a selected hole/slot/rectangle (on a plate layer) or a
+  /// selected note (on the drawing layer) to copy.
+  bool get canCopy => layer == TemplateMakerLayer.drawing
+      ? notes.any((n) => n.id == selectedNoteId)
+      : holes.any((h) => h.id == selectedHoleId);
+
+  /// Whether the clipboard holds something that belongs on the current layer:
+  /// holes on a plate layer, notes on the drawing layer.
+  bool get canPaste => layer == TemplateMakerLayer.drawing ? _clipNote != null : _clipHole != null;
+
+  /// Copies the selected hole or note to the clipboard. False if none is selected.
+  bool copySelection() {
+    if (layer == TemplateMakerLayer.drawing) {
+      final n = notes.where((e) => e.id == selectedNoteId).firstOrNull;
+      if (n == null) return false;
+      _clipNote = _noteCopy(n, 'clip', 0, 0);
+      _clipHole = null;
+      return true;
+    }
+    final h = holes.where((e) => e.id == selectedHoleId).firstOrNull;
+    if (h == null) return false;
+    _clipHole = TemplateMakerHole(
+      id: 'clip',
+      x: h.x,
+      y: h.y,
+      shape: h.shape,
+      diameter: h.diameter,
+      slotLength: h.slotLength,
+      slotWidth: h.slotWidth,
+      rotationDeg: h.rotationDeg,
+    );
+    _clipNote = null;
+    return true;
+  }
+
+  /// Pastes the clipboard onto the current layer, at the copied position -- or
+  /// nudged by [duplicateOffsetMm] steps until it no longer sits exactly on top
+  /// of a matching item -- and selects it. Returns the new item's id, or null if
+  /// the clipboard has nothing for this layer.
+  String? paste() {
+    if (layer == TemplateMakerLayer.drawing) {
+      final clip = _clipNote;
+      if (clip == null) return null;
+      var d = 0.0;
+      bool taken() => notes.any((n) => n.type == clip.type && (n.x - (clip.x + d)).abs() < 1e-6 && (n.y - (clip.y + d)).abs() < 1e-6);
+      for (var i = 0; i < 1000 && taken(); i++) {
+        d += duplicateOffsetMm;
+      }
+      final note = _noteCopy(clip, 'note${_nextNoteSeq++}', d, d);
+      notes.add(note);
+      selectedNoteId = note.id;
+      notifyListeners();
+      return note.id;
+    }
+    final clip = _clipHole;
+    if (clip == null) return null;
+    var d = 0.0;
+    bool taken() => holes.any((h) => h.shape == clip.shape && (h.x - (clip.x + d)).abs() < 1e-6 && (h.y - (clip.y + d)).abs() < 1e-6);
+    for (var i = 0; i < 1000 && taken(); i++) {
+      d += duplicateOffsetMm;
+    }
+    final hole = _cloneHole(clip)
+      ..x += d
+      ..y += d;
+    holes.add(hole);
+    selectedHoleId = hole.id;
+    notifyListeners();
+    return hole.id;
+  }
+
+  TemplateMakerNote _noteCopy(TemplateMakerNote n, String id, double dx, double dy) => TemplateMakerNote(
+        id: id,
+        type: n.type,
+        text: n.text,
+        x: n.x + dx,
+        y: n.y + dy,
+        x2: n.x2 + dx,
+        y2: n.y2 + dy,
+        width: n.width,
+        height: n.height,
+        radius: n.radius,
+        rotationDeg: n.rotationDeg,
+      );
 
   /// How far (mm) a duplicate is nudged so it doesn't hide under the original.
   static const double duplicateOffsetMm = 5;
@@ -763,6 +963,114 @@ class TemplateMakerController extends ChangeNotifier {
       if (radius != null && radius > 0) n.radius = radius;
       if (rotationDeg != null) n.rotationDeg = rotationDeg;
       break;
+    }
+    notifyListeners();
+  }
+
+  static const _minHoleSizeMm = 0.2;
+
+  /// The drag handles of [h], in template mm: a round hole's radius (its east
+  /// point), a slot's four edge midpoints (length and width) and a rectangle's
+  /// four corners. They follow the hole's rotation.
+  List<({HoleHandle handle, Vec2 point})> holeHandles(TemplateMakerHole h) {
+    Vec2 at(double lx, double ly) => Vec2(lx, ly).rotated(h.rotationDeg).add(Vec2(h.x, h.y));
+    final hl = h.slotLength / 2, hw = h.slotWidth / 2;
+    return switch (h.shape) {
+      TemplateMakerHoleShape.round => [(handle: HoleHandle.radius, point: at(h.diameter / 2, 0))],
+      TemplateMakerHoleShape.slot => [
+          (handle: HoleHandle.lengthPos, point: at(hl, 0)),
+          (handle: HoleHandle.lengthNeg, point: at(-hl, 0)),
+          (handle: HoleHandle.widthPos, point: at(0, hw)),
+          (handle: HoleHandle.widthNeg, point: at(0, -hw)),
+        ],
+      TemplateMakerHoleShape.rect => [
+          (handle: HoleHandle.cornerNE, point: at(hl, hw)),
+          (handle: HoleHandle.cornerNW, point: at(-hl, hw)),
+          (handle: HoleHandle.cornerSW, point: at(-hl, -hw)),
+          (handle: HoleHandle.cornerSE, point: at(hl, -hw)),
+        ],
+    };
+  }
+
+  /// Drags [handle] of hole [holeId] to [mm]. The hole's centre stays put and
+  /// it grows or shrinks symmetrically, measured in its own rotated frame.
+  void dragHoleHandle(String holeId, HoleHandle handle, Vec2 mm) {
+    final h = holes.where((e) => e.id == holeId).firstOrNull;
+    if (h == null) return;
+    final local = mm.subtract(Vec2(h.x, h.y)).rotated(-h.rotationDeg);
+    double size(double halfExtent) => math.max(2 * halfExtent.abs(), _minHoleSizeMm);
+    switch (handle) {
+      case HoleHandle.radius:
+        h.diameter = size(math.sqrt(local.x * local.x + local.y * local.y));
+      case HoleHandle.lengthPos || HoleHandle.lengthNeg:
+        h.slotLength = size(local.x);
+      case HoleHandle.widthPos || HoleHandle.widthNeg:
+        h.slotWidth = size(local.y);
+      case HoleHandle.cornerNE || HoleHandle.cornerNW || HoleHandle.cornerSW || HoleHandle.cornerSE:
+        h.slotLength = size(local.x);
+        h.slotWidth = size(local.y);
+    }
+    notifyListeners();
+  }
+
+  static const _minNoteSizeMm = 0.1;
+  static const _minTextHeightMm = 0.5;
+
+  /// The drag handles of [n], in template mm: a line's two ends, a
+  /// rectangle's four corners, a circle's radius (its east point) and a text
+  /// note's size (the right end of its baseline).
+  List<({NoteHandle handle, Vec2 point})> noteHandles(TemplateMakerNote n) => switch (n.type) {
+        AnnotationType.line => [
+            (handle: NoteHandle.start, point: Vec2(n.x, n.y)),
+            (handle: NoteHandle.end, point: Vec2(n.x2, n.y2)),
+          ],
+        AnnotationType.rect => [
+            (handle: NoteHandle.cornerSW, point: Vec2(n.x, n.y)),
+            (handle: NoteHandle.cornerSE, point: Vec2(n.x + n.width, n.y)),
+            (handle: NoteHandle.cornerNW, point: Vec2(n.x, n.y + n.height)),
+            (handle: NoteHandle.cornerNE, point: Vec2(n.x + n.width, n.y + n.height)),
+          ],
+        AnnotationType.circle => [(handle: NoteHandle.radius, point: Vec2(n.x + n.radius, n.y))],
+        AnnotationType.text => [
+            (handle: NoteHandle.textSize, point: Vec2(noteTextWidthMm(n), 0).rotated(n.rotationDeg).add(Vec2(n.x, n.y))),
+          ],
+      };
+
+  /// The corner of a rectangle note that stays put while its [handle] corner
+  /// is dragged (the opposite one).
+  Vec2 noteRectFixedCorner(TemplateMakerNote n, NoteHandle handle) => switch (handle) {
+        NoteHandle.cornerSW => Vec2(n.x + n.width, n.y + n.height),
+        NoteHandle.cornerSE => Vec2(n.x, n.y + n.height),
+        NoteHandle.cornerNW => Vec2(n.x + n.width, n.y),
+        NoteHandle.cornerNE => Vec2(n.x, n.y),
+        _ => Vec2(n.x, n.y),
+      };
+
+  /// Drags [handle] of note [noteId] to [mm]: moves a line end, resizes a
+  /// rectangle about the opposite corner [fixed] (captured when the drag
+  /// started, so dragging past it just flips the rectangle), sets a circle's
+  /// radius, or scales a text note so its baseline ends at [mm].
+  void dragNoteHandle(String noteId, NoteHandle handle, Vec2 mm, {Vec2? fixed}) {
+    final n = notes.where((e) => e.id == noteId).firstOrNull;
+    if (n == null) return;
+    switch (handle) {
+      case NoteHandle.start:
+        n.x = mm.x;
+        n.y = mm.y;
+      case NoteHandle.end:
+        n.x2 = mm.x;
+        n.y2 = mm.y;
+      case NoteHandle.cornerSW || NoteHandle.cornerSE || NoteHandle.cornerNW || NoteHandle.cornerNE:
+        final f = fixed ?? noteRectFixedCorner(n, handle);
+        n.x = math.min(mm.x, f.x);
+        n.y = math.min(mm.y, f.y);
+        n.width = math.max((mm.x - f.x).abs(), _minNoteSizeMm);
+        n.height = math.max((mm.y - f.y).abs(), _minNoteSizeMm);
+      case NoteHandle.radius:
+        n.radius = math.max(math.sqrt(math.pow(mm.x - n.x, 2) + math.pow(mm.y - n.y, 2)), _minNoteSizeMm);
+      case NoteHandle.textSize:
+        final local = mm.subtract(Vec2(n.x, n.y)).rotated(-n.rotationDeg);
+        n.height = math.max(local.x / (math.max(n.text.length, 1) * 0.6), _minTextHeightMm);
     }
     notifyListeners();
   }
