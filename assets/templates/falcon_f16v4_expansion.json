@@ -61,5 +61,140 @@
       },
       "radius": 1.85
     }
+  ],
+  "annotations": [
+    {
+      "type": "rect",
+      "x": 5.0,
+      "y": 5.0,
+      "width": 15.0,
+      "height": 10.0
+    },
+    {
+      "type": "rect",
+      "x": 163.0,
+      "y": 5.0,
+      "width": 15.0,
+      "height": 10.0
+    },
+    {
+      "type": "rect",
+      "x": 60.0,
+      "y": 55.0,
+      "width": 65.0,
+      "height": 9.0
+    },
+    {
+      "type": "rect",
+      "x": 35.0,
+      "y": 15.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 50.0,
+      "y": 15.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 65.0,
+      "y": 15.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 35.0,
+      "y": 25.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 50.0,
+      "y": 25.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 65.0,
+      "y": 25.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 138.0,
+      "y": 15.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 123.0,
+      "y": 15.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 108.0,
+      "y": 15.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 108.0,
+      "y": 25.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 123.0,
+      "y": 25.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 138.0,
+      "y": 25.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 80.0,
+      "y": 25.0,
+      "width": 11.5,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 93.0,
+      "y": 25.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 93.0,
+      "y": 15.0,
+      "width": 12.0,
+      "height": 5.0
+    },
+    {
+      "type": "rect",
+      "x": 80.0,
+      "y": 15.0,
+      "width": 11.5,
+      "height": 5.0
+    }
   ]
 }
