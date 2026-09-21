@@ -902,6 +902,27 @@ class TemplateMakerController extends ChangeNotifier {
     return note;
   }
 
+  /// Adds a zero-size line/rect/circle note anchored at [p] (a line's start,
+  /// a rectangle's corner, a circle's centre) and selects it, ready to be
+  /// sized by dragging a handle.
+  TemplateMakerNote addNoteAt(AnnotationType type, Vec2 p) {
+    final note = TemplateMakerNote(
+      id: 'note${_nextNoteSeq++}',
+      type: type,
+      x: p.x,
+      y: p.y,
+      x2: p.x,
+      y2: p.y,
+      width: _minNoteSizeMm,
+      height: _minNoteSizeMm,
+      radius: _minNoteSizeMm,
+    );
+    notes.add(note);
+    selectedNoteId = note.id;
+    notifyListeners();
+    return note;
+  }
+
   /// Duplicates a drawing-layer note, nudged by [duplicateOffsetMm], and
   /// selects the copy (returned; null if [noteId] isn't found).
   TemplateMakerNote? duplicateNote(String noteId) {

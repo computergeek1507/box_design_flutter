@@ -64,6 +64,13 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   Vec2? _measureHover;
   String? _draggingNoteId;
 
+  /// The shape armed on the drawing layer: dragging on the canvas draws a new
+  /// one of this type. Null means dragging selects/moves existing notes.
+  AnnotationType? _drawTool;
+
+  /// The note being created by the current draw-tool drag.
+  String? _creatingNoteId;
+
   /// The handle of the selected note being dragged (resize / move an end), and
   /// for a rectangle the corner that stays put.
   NoteHandle? _noteHandle;
@@ -335,6 +342,20 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     _imageDrag = _ImageDrag.none;
     if (_controller.layer == TemplateMakerLayer.drawing) {
       _noteHandle = null;
+      final tool = _drawTool;
+      if (tool != null) {
+        final start = _snapDrag(mm, size);
+        final note = _controller.addNoteAt(tool, start);
+        _creatingNoteId = _draggingNoteId = note.id;
+        _noteHandle = switch (tool) {
+          AnnotationType.line => NoteHandle.end,
+          AnnotationType.circle => NoteHandle.radius,
+          _ => NoteHandle.cornerNE,
+        };
+        _noteHandleFixed = start;
+        setState(_refreshNoteFields);
+        return;
+      }
       final selected = _controller.notes.where((n) => n.id == _controller.selectedNoteId).firstOrNull;
       final grabbed = selected == null ? null : _noteHandleAt(selected, mm, scale);
       if (selected != null && grabbed != null) {
@@ -498,6 +519,19 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   }
 
   void _onPreviewPanEnd(DragEndDetails details) {
+    final creatingId = _creatingNoteId;
+    if (creatingId != null) {
+      _creatingNoteId = null;
+      final n = _controller.notes.where((e) => e.id == creatingId).firstOrNull;
+      // A click without a real drag would leave a dot; drop it.
+      final tiny = n == null ||
+          switch (n.type) {
+            AnnotationType.line => math.sqrt(math.pow(n.x2 - n.x, 2) + math.pow(n.y2 - n.y, 2)) < 0.5,
+            AnnotationType.rect => n.width < 0.5 && n.height < 0.5,
+            _ => n.radius < 0.5,
+          };
+      if (n != null && tiny) _controller.removeNote(creatingId);
+    }
     _draggingHoleId = null;
     _holeHandle = null;
     _draggingNoteId = null;
@@ -803,8 +837,8 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     });
   }
 
-  /// True while the keyboard focus is in a text field, where Ctrl+C / Ctrl+V
-  /// belong to the text.
+  /// True while the keyboard focus is in a text field, where Ctrl+C / Ctrl+V /
+  /// Delete belong to the text.
   bool get _typingInTextField {
     final focused = FocusManager.instance.primaryFocus?.context;
     if (focused == null) return false;
@@ -814,6 +848,17 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final keyboard = HardwareKeyboard.instance;
+    if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
+      if (_typingInTextField || _controller.measureMode || !_controller.canCopy) return KeyEventResult.ignored;
+      setState(() {
+        if (_controller.layer == TemplateMakerLayer.drawing) {
+          _controller.removeNote(_controller.selectedNoteId!);
+        } else {
+          _controller.removeHole(_controller.selectedHoleId!);
+        }
+      });
+      return KeyEventResult.handled;
+    }
     if (!(keyboard.isControlPressed || keyboard.isMetaPressed) || keyboard.isAltPressed) return KeyEventResult.ignored;
     if (_typingInTextField) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.keyC) {
@@ -1261,7 +1306,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                   return AnimatedBuilder(
                     animation: _controller,
                     builder: (context, _) => MouseRegion(
-                      cursor: _controller.measureMode ? SystemMouseCursors.precise : MouseCursor.defer,
+                      cursor: _controller.measureMode || (_drawTool != null && _controller.layer == TemplateMakerLayer.drawing)
+                          ? SystemMouseCursors.precise
+                          : MouseCursor.defer,
                       onHover: (event) => _onPreviewHover(event, size),
                       onExit: (_) {
                         if (_measureHover != null) setState(() => _measureHover = null);
@@ -1356,6 +1403,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
           ],
           selected: {c.layer},
           onSelectionChanged: (selection) => setState(() {
+            _drawTool = null;
             c.selectLayer(selection.first);
             _syncHoleControllers();
             _refreshTopFields();
@@ -1514,6 +1562,22 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       if (stale) c.dispose();
       return stale;
     });
+    Widget drawTool(AnnotationType type, IconData icon, String label) {
+      final active = _drawTool == type;
+      final button = OutlinedButton.icon(
+        onPressed: () => setState(() => _drawTool = active ? null : type),
+        icon: Icon(icon, size: 18),
+        label: Text(label),
+        style: active
+            ? OutlinedButton.styleFrom(
+                backgroundColor: Colors.lightBlue.withValues(alpha: 0.2),
+                side: const BorderSide(color: Colors.lightBlue, width: 2),
+              )
+            : null,
+      );
+      return Tooltip(message: 'Drag on the canvas to draw a ${label.toLowerCase()}', child: button);
+    }
+
     return [
       const Divider(height: 32),
       Text('Drawing layer', style: Theme.of(context).textTheme.titleMedium),
@@ -1528,11 +1592,19 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         runSpacing: 4,
         children: [
           OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.text)), icon: const Icon(Icons.text_fields, size: 18), label: const Text('Text')),
-          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.line)), icon: const Icon(Icons.horizontal_rule, size: 18), label: const Text('Line')),
-          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.rect)), icon: const Icon(Icons.crop_square, size: 18), label: const Text('Rectangle')),
-          OutlinedButton.icon(onPressed: () => setState(() => _controller.addNote(AnnotationType.circle)), icon: const Icon(Icons.circle_outlined, size: 18), label: const Text('Circle')),
+          drawTool(AnnotationType.line, Icons.horizontal_rule, 'Line'),
+          drawTool(AnnotationType.rect, Icons.crop_square, 'Rectangle'),
+          drawTool(AnnotationType.circle, Icons.circle_outlined, 'Circle'),
         ],
       ),
+      if (_drawTool != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            'Drag on the canvas to draw. Click the highlighted tool again to go back to selecting and moving.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ),
       for (final n in _controller.notes) _noteRow(context, n),
     ];
   }
