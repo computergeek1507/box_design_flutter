@@ -15,12 +15,20 @@ export/import round trip:
         {"type": "circle", "center": {"x":.., "y":..}, "radius": ..},
         {"type": "arc", "center": {...}, "radius": .., "startAngle": .., "endAngle": ..},
         {"type": "polyline", "closed": bool, "vertices": [{"x":.., "y":.., "bulge":..}, ...]}
+      ],
+      "annotations": [
+        {"type": "line", "start": {"x":.., "y":..}, "end": {"x":.., "y":..}},
+        {"type": "rect", "x": .., "y": .., "width": .., "height": ..},
+        {"type": "circle", "center": {"x":.., "y":..}, "radius": ..}
       ]
     }
 
 The board outline comes from the Edge.Cuts layer; mounting/mechanical holes
 come from footprint pads (round NPTH holes by default, with an option to
-also pull in round/slotted PTH pads above a size threshold).
+also pull in round/slotted PTH pads above a size threshold). Graphics on
+the chosen layers (silkscreen by default; also courtyard and the user layers) become "annotations" -- lines, rectangles, circles, arcs (as
+short segments) and polygons on the drawing layer, drawn for reference but
+never cut.
 
 Install (KiCad plugin):
     Copy this file into KiCad's scripting/plugins folder, e.g. on Windows:
@@ -53,6 +61,28 @@ except ImportError:  # pure-geometry helpers below are still importable/testable
 VALID_CATEGORIES = ("controller", "controllerAddon", "receiver", "powerSupply", "powerDistribution", "box")
 
 PLUGIN_DIR = Path(__file__).resolve().parent
+
+# Layers that can be exported as drawing-layer notes: key -> (GUI label,
+# pcbnew layer attribute).
+NOTE_LAYERS = {
+    "silk_front": ("Front silkscreen (F.Silkscreen)", "F_SilkS"),
+    "silk_back": ("Back silkscreen (B.Silkscreen)", "B_SilkS"),
+    "courtyard_front": ("Front courtyard (F.Courtyard)", "F_CrtYd"),
+    "courtyard_back": ("Back courtyard (B.Courtyard)", "B_CrtYd"),
+    "dwgs_user": ("User drawings (Dwgs.User)", "Dwgs_User"),
+    "cmts_user": ("User comments (Cmts.User)", "Cmts_User"),
+}
+DEFAULT_NOTE_LAYERS = ("silk_front",)
+
+
+def parse_note_layers(text: str) -> tuple[str, ...]:
+    """"silk_front, courtyard_front" -> ("silk_front", "courtyard_front"); "none" or "" -> ()."""
+    keys = tuple(k.strip().lower() for k in re.split(r"[,\s]+", text or "") if k.strip())
+    keys = tuple(k for k in keys if k != "none")
+    bad = [k for k in keys if k not in NOTE_LAYERS]
+    if bad:
+        raise ValueError(f"unknown note layer(s) {bad}; choose from {list(NOTE_LAYERS)}")
+    return keys
 
 
 def find_templates_dir() -> Path | None:
@@ -130,6 +160,96 @@ def polyline_entity(points, closed: bool, bulges=None) -> dict:
         b = bulges[i] if bulges else 0.0
         verts.append({"x": p[0], "y": p[1], "bulge": b})
     return {"type": "polyline", "closed": closed, "vertices": verts}
+
+
+def line_annotation(start, end) -> dict:
+    """A drawing-layer note (see lib/models/annotation.dart): shown on the
+    canvas/PDF/DXF but never cut, unlike the "entities" that make up the plate.
+    """
+    return {"type": "line", "start": {"x": start[0], "y": start[1]}, "end": {"x": end[0], "y": end[1]}}
+
+
+def rect_annotation(a, c) -> dict:
+    """Rectangle note from two opposite corners."""
+    return {"type": "rect", "x": min(a[0], c[0]), "y": min(a[1], c[1]),
+            "width": abs(c[0] - a[0]), "height": abs(c[1] - a[1])}
+
+
+def circle_annotation(center, radius) -> dict:
+    return {"type": "circle", "center": {"x": center[0], "y": center[1]}, "radius": radius}
+
+
+def arc_annotations(center, radius, start, end, mid, step_deg: float = 10.0) -> list[dict]:
+    """Notes have no arc type, so an arc becomes a run of short line segments."""
+    a0, a1 = arc_angles_from_points(center, start, end, mid)
+    n = max(1, math.ceil((a1 - a0) / step_deg))
+    pts = []
+    for i in range(n + 1):
+        rad = math.radians(a0 + (a1 - a0) * i / n)
+        pts.append((center[0] + radius * math.cos(rad), center[1] + radius * math.sin(rad)))
+    return [line_annotation(pts[i], pts[i + 1]) for i in range(n)]
+
+
+def polygon_annotations(points) -> list[dict]:
+    """A closed polygon becomes one rectangle note if it is an axis-aligned
+    rectangle, otherwise one line note per edge.
+    """
+    if len(points) == 4:
+        xs = {round(p[0], 6) for p in points}
+        ys = {round(p[1], 6) for p in points}
+        if len(xs) == 2 and len(ys) == 2:
+            return [rect_annotation(points[0], points[2])]
+    return [line_annotation(points[i], points[(i + 1) % len(points)]) for i in range(len(points))
+            if points[i] != points[(i + 1) % len(points)]]
+
+
+def parse_ref_prefixes(text: str) -> tuple[str, ...]:
+    """"J, U" -> ("J", "U"): reference-designator letters, upper-cased."""
+    return tuple(p.strip().upper() for p in re.split(r"[,\s]+", text or "") if p.strip())
+
+
+def ref_matches(ref: str, prefixes) -> bool:
+    """True if the reference designator's letters are exactly one of
+    [prefixes] (J1 and J12 match "J"; JP1 doesn't). No prefixes matches all.
+    """
+    if not prefixes:
+        return True
+    m = re.match(r"([A-Za-z]+)\d", ref or "")
+    return bool(m) and m.group(1).upper() in prefixes
+
+
+def shift_annotations(annotations, dx: float, dy: float):
+    """Translate notes by (-dx, -dy), the same shift normalize_entities applies."""
+    if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+        return annotations
+    out = []
+    for a in annotations:
+        a = dict(a)
+        if a["type"] == "line":
+            a["start"] = {"x": a["start"]["x"] - dx, "y": a["start"]["y"] - dy}
+            a["end"] = {"x": a["end"]["x"] - dx, "y": a["end"]["y"] - dy}
+        elif a["type"] == "rect":
+            a["x"] -= dx; a["y"] -= dy
+        elif a["type"] == "circle":
+            a["center"] = {"x": a["center"]["x"] - dx, "y": a["center"]["y"] - dy}
+        out.append(a)
+    return out
+
+
+def round_annotations(annotations, ndigits=4):
+    def r(v):
+        return round(v, ndigits)
+    out = []
+    for a in annotations:
+        a = dict(a)
+        for k in ("x", "y", "width", "height", "radius"):
+            if k in a:
+                a[k] = r(a[k])
+        for k in ("start", "end", "center"):
+            if k in a:
+                a[k] = {"x": r(a[k]["x"]), "y": r(a[k]["y"])}
+        out.append(a)
+    return out
 
 
 def stadium_vertices(length: float, width: float):
@@ -226,7 +346,11 @@ def round_entities(entities, ndigits=4):
 class ExtractOptions:
     def __init__(self, flip_y=True, hole_min_mm=1.4, hole_max_mm=None,
                  include_npth=True, include_pth=False, include_slots=True,
-                 scale=1.0):
+                 scale=1.0, note_layers=DEFAULT_NOTE_LAYERS, part_refs=("J", "U")):
+        self.note_layers = tuple(note_layers)  # NOTE_LAYERS keys exported as drawing-layer notes
+        # Reference-designator letters whose footprints contribute notes; empty = all
+        # footprints plus the board's own graphics.
+        self.part_refs = tuple(part_refs)
         self.flip_y = flip_y
         self.hole_min_mm = hole_min_mm
         self.hole_max_mm = hole_max_mm
@@ -294,6 +418,76 @@ def extract_edge_cuts(board, opts: ExtractOptions, warnings: list[str]) -> list[
     return entities
 
 
+def _note_layer_ids(opts: ExtractOptions) -> set:
+    ids = set()
+    for key in opts.note_layers:
+        attr = NOTE_LAYERS[key][1]
+        if hasattr(pcbnew, attr):
+            ids.add(getattr(pcbnew, attr))
+    return ids
+
+
+def _shape_annotations(item, opts: ExtractOptions, rect_t) -> list[dict] | None:
+    """Notes for one PCB_SHAPE, or None if its shape type has no equivalent."""
+    shape_t = item.GetShape()
+    if shape_t == pcbnew.SHAPE_T_SEGMENT:
+        a, b = _pt_mm(item.GetStart(), opts), _pt_mm(item.GetEnd(), opts)
+        return [] if a == b else [line_annotation(a, b)]
+    if shape_t == pcbnew.SHAPE_T_CIRCLE:
+        return [circle_annotation(_pt_mm(item.GetCenter(), opts), pcbnew.ToMM(item.GetRadius()) * opts.scale)]
+    if shape_t == pcbnew.SHAPE_T_ARC:
+        return arc_annotations(
+            _pt_mm(item.GetCenter(), opts), pcbnew.ToMM(item.GetRadius()) * opts.scale,
+            _pt_mm(item.GetStart(), opts), _pt_mm(item.GetEnd(), opts), _pt_mm(item.GetArcMid(), opts),
+        )
+    if rect_t is not None and shape_t == rect_t:
+        return [rect_annotation(_pt_mm(item.GetStart(), opts), _pt_mm(item.GetEnd(), opts))]
+    if shape_t == pcbnew.SHAPE_T_POLY:
+        poly = item.GetPolyShape()
+        if poly.OutlineCount() == 0:
+            return []
+        outline = poly.Outline(0)
+        return polygon_annotations([_pt_mm(outline.CPoint(i), opts) for i in range(outline.PointCount())])
+    return None
+
+
+def extract_notes(board, opts: ExtractOptions, warnings: list[str]) -> list[dict]:
+    """Lines, rectangles, circles, arcs and polygons from the chosen layers
+    (see NOTE_LAYERS) as drawing-layer notes. Text and Bezier curves are skipped.
+    """
+    notes: list[dict] = []
+    layers = _note_layer_ids(opts)
+    if not layers:
+        return notes
+    rect_t = getattr(pcbnew, "SHAPE_T_RECTANGLE", None) or getattr(pcbnew, "SHAPE_T_RECT", None)
+
+    # With a part filter, only those parts' graphics count: loose board
+    # graphics (logos, labels) aren't parts.
+    items = [] if opts.part_refs else list(board.GetDrawings())
+    for fp in board.GetFootprints():
+        if ref_matches(fp.GetReference(), opts.part_refs):
+            items.extend(fp.GraphicalItems())
+
+    skipped_text = skipped_other = 0
+    for item in items:
+        if item.GetLayer() not in layers:
+            continue
+        if item.GetClass() not in ("PCB_SHAPE", "FP_SHAPE"):
+            if "TEXT" in item.GetClass():
+                skipped_text += 1
+            continue
+        result = _shape_annotations(item, opts, rect_t)
+        if result is None:
+            skipped_other += 1
+        else:
+            notes.extend(result)
+    if skipped_text:
+        warnings.append(f"skipped {skipped_text} text item(s) on the note layers -- add text in Template Maker instead")
+    if skipped_other:
+        warnings.append(f"skipped {skipped_other} unsupported shape(s) on the note layers (e.g. Bezier curves)")
+    return notes
+
+
 def extract_holes(board, opts: ExtractOptions, warnings: list[str]) -> list[dict]:
     entities: list[dict] = []
     for fp in board.GetFootprints():
@@ -359,12 +553,19 @@ def build_template(board, *, id_: str, name: str, category: str, opts: ExtractOp
             "Check that the board has NPTH/mechanical hole pads (" + "; ".join(hints) + ")."
         )
     entities = edge_entities + hole_entities
+    annotations = extract_notes(board, opts, warnings)
 
     if normalize:
+        # Notes share the plate's origin, so they get the plate's shift.
+        bbox = bounding_box(entities)
+        if bbox is not None:
+            annotations = shift_annotations(annotations, bbox[0], bbox[1])
         entities = normalize_entities(entities)
     entities = round_entities(entities)
 
     template = {"id": id_, "name": name, "category": category, "entities": entities}
+    if annotations:
+        template["annotations"] = round_annotations(annotations)
     return template, warnings
 
 
@@ -446,6 +647,18 @@ def _run_gui(board) -> None:
             grid.Add(wx.StaticText(panel, label=""))
             grid.Add(self.include_slots_ctrl)
 
+            self.note_layers_ctrl = wx.CheckListBox(
+                panel, choices=[label for label, _ in NOTE_LAYERS.values()], size=(-1, 130))
+            for idx, key in enumerate(NOTE_LAYERS):
+                self.note_layers_ctrl.Check(idx, key in DEFAULT_NOTE_LAYERS)
+            add_row("Layers as notes:", self.note_layers_ctrl)
+
+            self.part_refs_ctrl = wx.TextCtrl(panel, value="J, U")
+            self.part_refs_ctrl.SetToolTip(
+                "Reference-designator letters whose footprint graphics are exported, e.g. J, U. "
+                "Leave empty for every part plus the board's own graphics.")
+            add_row("Parts (ref letters):", self.part_refs_ctrl)
+
             self.normalize_ctrl = wx.CheckBox(panel, label="Normalize origin to bounding-box corner")
             self.normalize_ctrl.SetValue(True)
             grid.Add(wx.StaticText(panel, label=""))
@@ -526,6 +739,9 @@ def _run_gui(board) -> None:
                 include_npth=self.include_npth_ctrl.GetValue(),
                 include_pth=self.include_pth_ctrl.GetValue(),
                 include_slots=self.include_slots_ctrl.GetValue(),
+                note_layers=tuple(key for idx, key in enumerate(NOTE_LAYERS)
+                                  if self.note_layers_ctrl.IsChecked(idx)),
+                part_refs=parse_ref_prefixes(self.part_refs_ctrl.GetValue()),
             )
             try:
                 template, warnings = build_template(
@@ -550,7 +766,8 @@ def _run_gui(board) -> None:
                 self._log(f"ERROR: Could not write {out_path}: {exc}")
                 return
 
-            summary = f"Wrote {out_path} ({len(template['entities'])} entities)"
+            summary = (f"Wrote {out_path} ({len(template['entities'])} entities, "
+                       f"{len(template.get('annotations', []))} notes)")
             if warnings:
                 summary += f" with {len(warnings)} warning(s)"
             self._log(summary + ".")
@@ -614,6 +831,14 @@ def _cli_main(argv: list[str]) -> int:
                          help="Also include plated (PTH) holes, not just NPTH mounting holes")
     parser.add_argument("--no-npth", action="store_true", help="Exclude NPTH mounting holes")
     parser.add_argument("--no-slots", action="store_true", help="Exclude oblong/slotted holes")
+    parser.add_argument("--note-layers", default=",".join(DEFAULT_NOTE_LAYERS),
+                         help="Comma separated layers to export as drawing-layer notes, from "
+                              f"{', '.join(NOTE_LAYERS)} (default: {','.join(DEFAULT_NOTE_LAYERS)}; "
+                              "'none' for no notes)")
+    parser.add_argument("--part-refs", default="J,U",
+                         help="Reference-designator letters whose footprint graphics are exported, comma "
+                              "separated (default: J,U). Pass '' for every part plus the board's own "
+                              "graphics")
     parser.add_argument("--no-normalize", action="store_true",
                          help="Don't translate geometry so its bounding box starts at (0, 0)")
     parser.add_argument("--no-flip-y", action="store_true",
@@ -640,6 +865,8 @@ def _cli_main(argv: list[str]) -> int:
         include_npth=not args.no_npth,
         include_pth=args.include_pth,
         include_slots=not args.no_slots,
+        note_layers=parse_note_layers(args.note_layers),
+        part_refs=parse_ref_prefixes(args.part_refs),
     )
     template, warnings = build_template(
         board, id_=id_, name=args.name, category=args.category, opts=opts,
@@ -647,7 +874,8 @@ def _cli_main(argv: list[str]) -> int:
     )
     write_template(template, output_path, update_index=args.update_index)
 
-    print(f"Wrote {output_path} ({len(template['entities'])} entities)")
+    print(f"Wrote {output_path} ({len(template['entities'])} entities, "
+          f"{len(template.get('annotations', []))} notes)")
     for w in warnings:
         print(f"  warning: {w}")
     return 0

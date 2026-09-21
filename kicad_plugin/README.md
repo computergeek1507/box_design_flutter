@@ -36,6 +36,14 @@ Tested against KiCad 9.
    - **Include NPTH / PTH / slotted holes** -- NPTH (non-plated mechanical)
      holes are on by default, since that's what `MountingHole` footprints
      use; turn on PTH too if the board uses plated holes for mounting.
+   - **Layers as notes** -- tick the layers to export as drawing-layer notes:
+     shown on the canvas, PDF and DXF for reference, but never cut. Front
+     silkscreen is ticked by default; courtyards and the user layers are there
+     too. See [Notes from layers](#notes-from-layers).
+   - **Parts (ref letters)** -- reference-designator letters whose footprint
+     graphics are exported, `J, U` by default (connectors and ICs: `J1`, `U3`,
+     but not `JP1`). Leave it empty for every part plus the board's own loose
+     graphics.
    - **Normalize origin** -- shifts geometry so the bounding box's min
      corner sits at (0, 0), matching every bundled template's convention.
      Leave this on unless you have a specific reason not to.
@@ -55,6 +63,34 @@ what `dxf_to_json.py` then passes through unchanged -- so a template
 exported here lines up with one exported via
 *File > Plot > DXF* + `dxf_to_json.py` for the same board.
 
+## Notes from layers
+
+Graphics on the ticked layers become the template's drawing layer
+(`"annotations"`), so you can see where connectors, keep-clear areas and
+labelled regions sit when placing cut-outs. They use the same origin shift and
+Y flip as the plate, so they line up with the outline and holes.
+
+| Layer choice | Source |
+| --- | --- |
+| Front / back silkscreen | Footprint (and, with no part filter, board) graphics on F/B.Silkscreen |
+| Front / back courtyard | Footprint courtyard outlines on F/B.Courtyard |
+| User drawings / comments | Graphics on Dwgs.User / Cmts.User |
+
+| KiCad shape | Note |
+| --- | --- |
+| Line | line |
+| Rectangle, or a 4-point axis-aligned polygon | rectangle |
+| Circle | circle (outline) |
+| Arc | short line segments (10 degrees each) |
+| Other polygon | one line per edge |
+
+Text and Bezier curves are skipped (and listed in the log); add text in
+Template Maker's drawing layer instead. Back layers are exported as seen from
+the front, not mirrored. The CLI equivalents are
+`--note-layers silk_front,courtyard_front` (`none` for no notes; keys are
+`silk_front`, `silk_back`, `courtyard_front`, `courtyard_back`,
+`dwgs_user`, `cmts_user`) and `--part-refs J,U` (`--part-refs ""` for all parts).
+
 ## Standalone CLI (no KiCad GUI needed)
 
 Useful for scripting or batch-generating templates from multiple boards.
@@ -67,7 +103,7 @@ Run it with KiCad's own bundled Python (it needs the `pcbnew` module):
 ```
 
 Run with `--help` for every option (hole size thresholds, PTH/NPTH/slot
-toggles, `--no-normalize`, `--no-flip-y`, etc.) -- they mirror the GUI
+toggles, `--note-layers`, `--part-refs`, `--no-normalize`, `--no-flip-y`, etc.) -- they mirror the GUI
 dialog's fields.
 
 ## Notes / limitations
