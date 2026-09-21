@@ -19,7 +19,12 @@ class DesignPainter extends CustomPainter {
   final double pixelsPerMm;
   final bool isDark;
 
-  DesignPainter(this.controller, {required this.pixelsPerMm, this.isDark = false}) : super(repaint: controller);
+  /// Room (mm) the canvas leaves around the box on every side; everything is
+  /// drawn shifted by this much so items hanging off the box stay visible.
+  final double marginMm;
+
+  DesignPainter(this.controller, {required this.pixelsPerMm, this.isDark = false, this.marginMm = 0})
+      : super(repaint: controller);
 
   Color get _outlineColor => isDark ? Colors.white : Colors.black;
   Color get _templateColor => isDark ? Colors.white70 : Colors.black87;
@@ -34,6 +39,8 @@ class DesignPainter extends CustomPainter {
     final project = controller.project;
     final boxHeightMm = project.boxHeight;
 
+    canvas.save();
+    canvas.translate(marginMm * pixelsPerMm, marginMm * pixelsPerMm);
     _drawGrid(canvas, project, boxHeightMm);
     _drawEntities(canvas, project.sheetOutline, boxHeightMm, color: _outlineColor, width: 2);
     if (project.dualLayer) {
@@ -69,6 +76,7 @@ class DesignPainter extends CustomPainter {
     }
 
     _drawMeasurement(canvas, boxHeightMm);
+    canvas.restore();
   }
 
   void _drawMeasurement(Canvas canvas, double boxHeightMm) {

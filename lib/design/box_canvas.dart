@@ -10,6 +10,9 @@ import 'snap.dart';
 
 const double pixelsPerMm = 4.0;
 
+/// Room shown around the box (mm), matching how far items may hang off it.
+const double _marginMm = DesignController.overhangMm;
+
 /// The interactive design surface: renders the box + placed templates +
 /// holes, supports drag to move any item, and accepting templates/hole
 /// presets dropped from the palette.
@@ -55,19 +58,19 @@ class _BoxCanvasState extends State<BoxCanvas> {
 
   Vec2 _localPxToMm(Offset localPx, double boxHeightMm) {
     return Vec2(
-      localPx.dx / pixelsPerMm,
-      boxHeightMm - localPx.dy / pixelsPerMm,
+      localPx.dx / pixelsPerMm - _marginMm,
+      boxHeightMm + _marginMm - localPx.dy / pixelsPerMm,
     );
   }
 
   Rect _mmBoxToScreenRect(BoundingBox boundingBox, double boxHeightMm) {
     final p1 = Offset(
-      boundingBox.minX * pixelsPerMm,
-      (boxHeightMm - boundingBox.maxY) * pixelsPerMm,
+      (boundingBox.minX + _marginMm) * pixelsPerMm,
+      (boxHeightMm + _marginMm - boundingBox.maxY) * pixelsPerMm,
     );
     final p2 = Offset(
-      boundingBox.maxX * pixelsPerMm,
-      (boxHeightMm - boundingBox.minY) * pixelsPerMm,
+      (boundingBox.maxX + _marginMm) * pixelsPerMm,
+      (boxHeightMm + _marginMm - boundingBox.minY) * pixelsPerMm,
     );
     return Rect.fromPoints(p1, p2).inflate(4);
   }
@@ -79,8 +82,8 @@ class _BoxCanvasState extends State<BoxCanvas> {
       builder: (context, _) {
         final project = controller.project;
         final boxHeightMm = project.boxHeight;
-        final contentWidth = project.boxWidth * pixelsPerMm;
-        final contentHeight = project.boxHeight * pixelsPerMm;
+        final contentWidth = (project.boxWidth + 2 * _marginMm) * pixelsPerMm;
+        final contentHeight = (project.boxHeight + 2 * _marginMm) * pixelsPerMm;
 
         final itemOverlays = <Widget>[];
         for (final placed in project.placedTemplates) {
@@ -138,6 +141,7 @@ class _BoxCanvasState extends State<BoxCanvas> {
                           painter: DesignPainter(
                             controller,
                             pixelsPerMm: pixelsPerMm,
+                            marginMm: _marginMm,
                             isDark: Theme.of(context).brightness == Brightness.dark,
                           ),
                         ),

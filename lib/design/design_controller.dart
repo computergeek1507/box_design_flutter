@@ -367,12 +367,20 @@ class DesignController extends ChangeNotifier {
     return null;
   }
 
-  /// Keeps every hole and placed template entirely within the box outline's
-  /// bounding box: an item dropped, dragged, typed or loaded outside it is
-  /// pushed back in (it can't be seen, selected or cut out there anyway).
-  /// An item larger than the box is aligned to the box's min corner.
+  /// How far (mm) an item may hang past the box outline's bounding box; the
+  /// canvas shows this much room around the box.
+  static const double overhangMm = 10;
+
+  /// Keeps every hole and placed template within [overhangMm] of the box
+  /// outline's bounding box: an item dropped, dragged, typed or loaded further
+  /// out is pushed back (it can't be seen or selected out there). A little
+  /// overhang is allowed so an item can sit partly off the edge, e.g. a
+  /// slot open to the side. An item larger than that is aligned to the
+  /// allowance's min corner. A two-layer box gets no overhang: its plates sit
+  /// side by side, so an item hanging off one would sit over the other.
   void _clampIntoBox() {
     if (project.boxOutline.isEmpty) return;
+    final overhang = project.dualLayer ? 0.0 : overhangMm;
     final boxes = project.plateBoxes;
     Vec2 shiftFor(BoundingBox b) {
       final box = boxes[project.plateIndexForPoint(_center(b))];
@@ -382,7 +390,10 @@ class DesignController extends ChangeNotifier {
         return 0;
       }
 
-      return Vec2(axis(b.minX, b.maxX, box.minX, box.maxX), axis(b.minY, b.maxY, box.minY, box.maxY));
+      return Vec2(
+        axis(b.minX, b.maxX, box.minX - overhang, box.maxX + overhang),
+        axis(b.minY, b.maxY, box.minY - overhang, box.maxY + overhang),
+      );
     }
 
     var changed = false;
