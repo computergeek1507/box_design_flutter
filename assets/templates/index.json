@@ -368,6 +368,10 @@
     "file": "pb16_expansion.json"
   },
   {
+    "id": "pb16_four_out",
+    "file": "pb16_four_out.json"
+  },
+  {
     "id": "pb16_mini",
     "file": "pb16_mini.json"
   },
@@ -382,10 +386,6 @@
   {
     "id": "pixlite_4_controller",
     "file": "pixlite_4_controller.json"
-  },
-  {
-    "id": "pp16_four_out",
-    "file": "four_out.json"
   },
   {
     "id": "qilipsu_ql",
