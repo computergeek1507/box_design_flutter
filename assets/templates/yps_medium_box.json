@@ -2,6 +2,16 @@
   "id": "yps_medium_box",
   "name": "YPS Medium Box",
   "category": "box",
+  "templateMakerCustomOutline": [
+    { "x": 0, "y": 0, "style": "fillet", "size": 6.5 },
+    { "x": 350, "y": 0, "style": "fillet", "size": 6.5 },
+    { "x": 350, "y": 256, "style": "fillet", "size": 6.5 },
+    { "x": 0, "y": 256, "style": "fillet", "size": 6.5 },
+    { "x": 0, "y": 195.5, "style": "fillet", "size": 1.5 },
+    { "x": 20.2, "y": 195.5, "style": "fillet", "size": 3.0 },
+    { "x": 20.2, "y": 60.5, "style": "fillet", "size": 3.0 },
+    { "x": 0, "y": 60.5, "style": "fillet", "size": 1.5 }
+  ],
   "entities": [
     {
       "type": "polyline",

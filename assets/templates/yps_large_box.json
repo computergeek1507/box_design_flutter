@@ -2,6 +2,16 @@
   "id": "yps_large_box",
   "name": "YPS Large Box",
   "category": "box",
+  "templateMakerCustomOutline": [
+    { "x": 0, "y": 0, "style": "fillet", "size": 6.5 },
+    { "x": 460, "y": 0, "style": "fillet", "size": 6.5 },
+    { "x": 460, "y": 315, "style": "fillet", "size": 6.5 },
+    { "x": 0, "y": 315, "style": "fillet", "size": 6.5 },
+    { "x": 0, "y": 227.2, "style": "fillet", "size": 10.0 },
+    { "x": 32.2, "y": 227.2, "style": "fillet", "size": 2.0 },
+    { "x": 32.2, "y": 87.8, "style": "fillet", "size": 2.0 },
+    { "x": 0, "y": 87.8, "style": "fillet", "size": 10.0 }
+  ],
   "entities": [
     {
       "type": "polyline",
