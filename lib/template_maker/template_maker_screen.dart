@@ -76,6 +76,25 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   /// The note being created by the current draw-tool drag.
   String? _creatingNoteId;
 
+  /// While true, clicking the canvas (on a plate layer with a custom
+  /// outline) appends a new outline point instead of selecting/dragging.
+  bool _addingOutlinePoint = false;
+
+  /// The custom outline point index being dragged (placed or moved), if any.
+  int? _draggingOutlinePointIndex;
+
+  /// While dragging an existing outline point with Shift held, the drag
+  /// grows the point's fillet/chamfer size instead of moving it -- these
+  /// record where that drag started and the size it started from.
+  Vec2? _outlinePointResizeStart;
+  double _outlinePointResizeBaseSize = 0;
+
+  /// For detecting a double-click on the outline (not on an existing point)
+  /// to insert a new point there, mirroring the note double-click detector
+  /// below but for the plate layer.
+  DateTime _lastPlateTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Vec2? _lastPlateTapMm;
+
   /// Canvas zoom (1 = the whole plate fits) and how far the view centre has
   /// been panned from the plate's centre, in mm.
   /// The canvas size from the latest layout, for keyboard zoom.
@@ -172,6 +191,13 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   final _heightFocus = FocusNode();
   final _cornerSizeFocus = FocusNode();
 
+  final _outlinePointXController = TextEditingController();
+  final _outlinePointYController = TextEditingController();
+  final _outlinePointSizeController = TextEditingController();
+  final _outlinePointXFocus = FocusNode();
+  final _outlinePointYFocus = FocusNode();
+  final _outlinePointSizeFocus = FocusNode();
+
   final _shiftDistanceController = TextEditingController(text: '1');
 
   final _imageXController = TextEditingController(text: '0.0');
@@ -225,6 +251,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     _widthController.dispose();
     _heightController.dispose();
     _cornerSizeController.dispose();
+    _outlinePointXController.dispose();
+    _outlinePointYController.dispose();
+    _outlinePointSizeController.dispose();
     _shiftDistanceController.dispose();
     for (final c in [_imageXController, _imageYController, _imageWController, _imageHController]) {
       c.dispose();
@@ -240,6 +269,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     _widthFocus.dispose();
     _heightFocus.dispose();
     _cornerSizeFocus.dispose();
+    _outlinePointXFocus.dispose();
+    _outlinePointYFocus.dispose();
+    _outlinePointSizeFocus.dispose();
     for (final c in [
       ..._holeX.values,
       ..._holeY.values,
@@ -319,6 +351,21 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       _holeWidth[h.id]?.text = _fmt(h.slotWidth);
       _holeRotation[h.id]?.text = _fmt(h.rotationDeg);
     }
+    _refreshOutlinePointFields();
+  }
+
+  /// Syncs the selected outline point's X/Y/Size fields to its current
+  /// values -- called whenever the selection changes or the point moves
+  /// (by drag or by typing in these fields themselves), so the fields never
+  /// show a stale position.
+  void _refreshOutlinePointFields() {
+    final index = _controller.selectedOutlinePointIndex;
+    final points = _controller.customOutlinePoints;
+    if (index == null || index < 0 || index >= points.length) return;
+    final point = points[index];
+    _outlinePointXController.text = _fmt(point.position.x);
+    _outlinePointYController.text = _fmt(point.position.y);
+    _outlinePointSizeController.text = _fmt(point.size);
   }
 
   /// Mirrors [TemplateOutlinePainter]'s scale-to-fit transform so pointer
@@ -424,6 +471,44 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     return closest;
   }
 
+  int? _outlinePointNear(Vec2 mm, double scale) {
+    final hitToleranceMm = _holeDragHitPx / scale;
+    int? closest;
+    var closestDist = hitToleranceMm;
+    final points = _controller.customOutlinePoints;
+    for (var i = 0; i < points.length; i++) {
+      final dx = points[i].position.x - mm.x;
+      final dy = points[i].position.y - mm.y;
+      final dist = math.sqrt(dx * dx + dy * dy);
+      if (dist <= closestDist) {
+        closestDist = dist;
+        closest = i;
+      }
+    }
+    return closest;
+  }
+
+  /// The outline point index [mm] should be inserted *after* (i.e. the
+  /// nearest edge, as a segment between consecutive points), within
+  /// [toleranceMm], or null if no edge is close enough. With 3+ points the
+  /// outline is closed (the last edge wraps back to the first point).
+  int? _outlineEdgeNear(Vec2 mm, double toleranceMm) {
+    final points = _controller.customOutlinePoints;
+    final n = points.length;
+    if (n < 2) return null;
+    final edgeCount = n >= 3 ? n : n - 1;
+    int? closestIndex;
+    var closestDist = toleranceMm;
+    for (var i = 0; i < edgeCount; i++) {
+      final dist = _distToSegment(mm, points[i].position, points[(i + 1) % n].position);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestIndex = i;
+      }
+    }
+    return closestIndex;
+  }
+
   void _onPreviewPanStart(DragStartDetails details, Size size) {
     _focusCanvasKeys();
     if (_controller.measureMode) return;
@@ -484,6 +569,19 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       // Grabbing a note that is already part of a multi-selection drags them all.
       if (!_controller.selectedNoteIds.contains(hit.id)) setState(() => _controller.selectNote(hit.id));
       return;
+    }
+    if (_controller.useCustomOutline && !_addingOutlinePoint) {
+      final idx = _outlinePointNear(mm, scale);
+      if (idx != null) {
+        _draggingOutlinePointIndex = idx;
+        _outlinePointResizeStart = mm;
+        _outlinePointResizeBaseSize = _controller.customOutlinePoints[idx].size;
+        setState(() {
+          _controller.selectOutlinePoint(idx);
+          _refreshOutlinePointFields();
+        });
+        return;
+      }
     }
     _holeHandle = null;
     final selectedHole = _controller.holes.where((h) => h.id == _controller.selectedHoleId).firstOrNull;
@@ -651,6 +749,82 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   void _onPreviewTapDown(TapDownDetails details, Size size) {
     _focusCanvasKeys();
     if (_controller.measureMode) return;
+    if (_controller.useCustomOutline && _addingOutlinePoint) {
+      // A plain click (no drag) never reaches onPanStart, so adding a point
+      // on tap is what makes "click to add points" actually work --
+      // onPanStart still handles dragging an already-placed point.
+      final mm = _previewPxToMm(details.localPosition, size);
+      final scale = _previewScale(size);
+      final existingIndex = _outlinePointNear(mm, scale);
+      if (existingIndex != null) {
+        // Clicking an existing point while still in add mode re-anchors
+        // where the *next* click inserts, instead of adding a new point
+        // wherever you clicked chained onto whatever was selected before --
+        // e.g. jump to a point on the right/bottom side before continuing,
+        // without leaving add mode to reselect it first.
+        setState(() {
+          _controller.selectOutlinePoint(existingIndex);
+          _refreshOutlinePointFields();
+        });
+        return;
+      }
+      // Inserting after the selected point (rather than always appending at
+      // the very end) keeps the path in the right order and, since the new
+      // point becomes selected too, each further click chains onto the last
+      // one -- select a point on the side you want to extend and it builds
+      // from there instead of jumping back to wherever the last point
+      // happened to be.
+      final start = _snapDrag(mm, size);
+      setState(() {
+        final selected = _controller.selectedOutlinePointIndex;
+        if (selected != null) {
+          _controller.insertOutlinePointAfter(selected, start);
+        } else {
+          _controller.addOutlinePointAt(start);
+        }
+        _refreshOutlinePointFields();
+      });
+      return;
+    }
+    if (_controller.useCustomOutline && !_addingOutlinePoint) {
+      final mm = _previewPxToMm(details.localPosition, size);
+      final scale = _previewScale(size);
+      // A plain click (no drag) never reaches onPanStart (see the add-point
+      // branch above), so selecting a point has to happen here too --
+      // otherwise it only "works" by the accident of a click having a
+      // little incidental movement.
+      final pointIndex = _outlinePointNear(mm, scale);
+      if (pointIndex != null) {
+        setState(() {
+          _controller.selectOutlinePoint(pointIndex);
+          _refreshOutlinePointFields();
+        });
+        _lastPlateTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+        return;
+      }
+      // Double-clicking an edge (not an existing point) inserts a new point
+      // right there, in its correct place along the path -- handy without
+      // switching into "Add outline point" mode first.
+      final now = DateTime.now();
+      final lastMm = _lastPlateTapMm;
+      final isDoubleClick = lastMm != null &&
+          now.difference(_lastPlateTapAt) < const Duration(milliseconds: 400) &&
+          (lastMm.x - mm.x) * (lastMm.x - mm.x) + (lastMm.y - mm.y) * (lastMm.y - mm.y) < math.pow(10 / scale, 2);
+      _lastPlateTapAt = now;
+      _lastPlateTapMm = mm;
+      if (isDoubleClick) {
+        final edgeIndex = _outlineEdgeNear(mm, 10 / scale);
+        if (edgeIndex != null) {
+          final snapped = _snapDrag(mm, size);
+          setState(() {
+            _controller.insertOutlinePointAfter(edgeIndex, snapped);
+            _refreshOutlinePointFields();
+          });
+          _lastPlateTapAt = DateTime.fromMillisecondsSinceEpoch(0);
+          return;
+        }
+      }
+    }
     if (_controller.layer == TemplateMakerLayer.drawing) {
       final hit = _noteAt(_previewPxToMm(details.localPosition, size), _previewScale(size));
       _collapseToNoteId = null;
@@ -728,6 +902,38 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       });
       return;
     }
+    final opIndex = _draggingOutlinePointIndex;
+    if (opIndex != null) {
+      final rawMm = _previewPxToMm(details.localPosition, size);
+      final resizeStart = _outlinePointResizeStart;
+      if (HardwareKeyboard.instance.isShiftPressed && resizeStart != null) {
+        // Shift+drag grows the point's fillet/chamfer size instead of
+        // moving it -- distance dragged from where the drag started is
+        // added to the size it started from, so it can only grow from
+        // there (drag back toward the start to shrink back down).
+        final dx = rawMm.x - resizeStart.x, dy = rawMm.y - resizeStart.y;
+        final dragged = math.sqrt(dx * dx + dy * dy);
+        // Jumps in 1mm steps rather than tracking the pointer continuously,
+        // so it's easy to land on a clean size instead of fighting sub-mm
+        // jitter.
+        final size = ((_outlinePointResizeBaseSize + dragged).round()).toDouble();
+        setState(() {
+          final point = _controller.customOutlinePoints[opIndex];
+          if (point.style == OutlineCornerStyle.sharp) {
+            _controller.setOutlinePointStyle(opIndex, OutlineCornerStyle.fillet);
+          }
+          _controller.setOutlinePointSize(opIndex, size);
+          _refreshOutlinePointFields();
+        });
+        return;
+      }
+      final mm = _snapDrag(rawMm, size);
+      setState(() {
+        _controller.moveOutlinePoint(opIndex, mm);
+        _refreshOutlinePointFields();
+      });
+      return;
+    }
     final draggingId = _draggingHoleId;
     if (draggingId == null) {
       if (_imageDrag == _ImageDrag.none) return;
@@ -766,6 +972,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       _marqueeStart != null ||
       _draggingNoteId != null ||
       _draggingHoleId != null ||
+      _draggingOutlinePointIndex != null ||
       _creatingNoteId != null ||
       _imageDrag != _ImageDrag.none;
 
@@ -792,6 +999,8 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     }
     _marqueeStart = _marqueeEnd = null;
     _draggingHoleId = null;
+    _draggingOutlinePointIndex = null;
+    _outlinePointResizeStart = null;
     _holeHandle = null;
     _draggingNoteId = null;
     _noteHandle = null;
@@ -864,6 +1073,95 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         commit();
         focus.unfocus();
       },
+    );
+  }
+
+  /// X/Y position (manually editable) plus corner style/size for the
+  /// selected custom-outline point.
+  Widget _outlinePointEditor(BuildContext context, int index) {
+    final point = _controller.customOutlinePoints[index];
+    void commitX() => _commitMathField(_outlinePointXController, (v) {
+          _controller.moveOutlinePoint(index, Vec2(v, _controller.customOutlinePoints[index].position.y));
+        });
+    void commitY() => _commitMathField(_outlinePointYController, (v) {
+          _controller.moveOutlinePoint(index, Vec2(_controller.customOutlinePoints[index].position.x, v));
+        });
+    void commitSize() => _commitMathField(_outlinePointSizeController, (v) => _controller.setOutlinePointSize(index, v));
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Selected point', style: Theme.of(context).textTheme.labelLarge),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _outlinePointXController,
+                focusNode: _outlinePointXFocus,
+                decoration: const InputDecoration(labelText: 'X (mm)', isDense: true, border: OutlineInputBorder()),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                onSubmitted: (_) => commitX(),
+                onEditingComplete: commitX,
+                onTapOutside: (_) {
+                  commitX();
+                  _outlinePointXFocus.unfocus();
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _outlinePointYController,
+                focusNode: _outlinePointYFocus,
+                decoration: const InputDecoration(labelText: 'Y (mm)', isDense: true, border: OutlineInputBorder()),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                onSubmitted: (_) => commitY(),
+                onEditingComplete: commitY,
+                onTapOutside: (_) {
+                  commitY();
+                  _outlinePointYFocus.unfocus();
+                },
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: DropdownButtonFormField<OutlineCornerStyle>(
+                initialValue: point.style,
+                decoration: const InputDecoration(labelText: 'Corner', isDense: true, border: OutlineInputBorder()),
+                items: const [
+                  DropdownMenuItem(value: OutlineCornerStyle.sharp, child: Text('Sharp')),
+                  DropdownMenuItem(value: OutlineCornerStyle.fillet, child: Text('Fillet')),
+                  DropdownMenuItem(value: OutlineCornerStyle.chamfer, child: Text('Chamfer')),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => _controller.setOutlinePointStyle(index, v));
+                },
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _outlinePointSizeController,
+                focusNode: _outlinePointSizeFocus,
+                enabled: point.style != OutlineCornerStyle.sharp,
+                decoration: const InputDecoration(labelText: 'Size (mm)', isDense: true, border: OutlineInputBorder()),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                onSubmitted: (_) => commitSize(),
+                onEditingComplete: commitSize,
+                onTapOutside: (_) {
+                  commitSize();
+                  _outlinePointSizeFocus.unfocus();
+                },
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
@@ -1107,14 +1405,23 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final keyboard = HardwareKeyboard.instance;
-    if (event.logicalKey == LogicalKeyboardKey.escape && (_drawTool != null || _dragActive)) {
+    if (event.logicalKey == LogicalKeyboardKey.escape && (_drawTool != null || _dragActive || _addingOutlinePoint)) {
       // Escape stops drawing: cancels a drag in progress and disarms the tool.
       if (_dragActive) _finishDrag();
-      setState(() => _drawTool = null);
+      setState(() {
+        _drawTool = null;
+        _addingOutlinePoint = false;
+      });
       return KeyEventResult.handled;
     }
     if (event.logicalKey == LogicalKeyboardKey.delete || event.logicalKey == LogicalKeyboardKey.backspace) {
-      if (_typingInTextField || _controller.measureMode || !_controller.canCopy) return KeyEventResult.ignored;
+      if (_typingInTextField || _controller.measureMode) return KeyEventResult.ignored;
+      final opIndex = _controller.selectedOutlinePointIndex;
+      if (_controller.useCustomOutline && opIndex != null) {
+        setState(() => _controller.removeOutlinePoint(opIndex));
+        return KeyEventResult.handled;
+      }
+      if (!_controller.canCopy) return KeyEventResult.ignored;
       setState(() {
         if (_controller.layer == TemplateMakerLayer.drawing) {
           _controller.deleteSelectedNotes();
@@ -1204,57 +1511,93 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     final hCtrl = TextEditingController();
     final vCtrl = TextEditingController();
     final dCtrl = TextEditingController(text: '4');
+    final lenCtrl = TextEditingController(text: '6');
+    final widthCtrl = TextEditingController(text: '4');
     final offsetCtrl = TextEditingController();
+    var shape = TemplateMakerHoleShape.round;
     try {
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (dialogContext) => AlertDialog(
-          title: const Text('Quick 4-Hole Pattern'),
-          content: SizedBox(
-            width: 280,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text('Places 4 round holes centered on the outline\'s centerline.'),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: hCtrl,
-                  autofocus: true,
-                  decoration: const InputDecoration(labelText: 'Horizontal spacing (mm)', isDense: true, border: OutlineInputBorder()),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: vCtrl,
-                  decoration: const InputDecoration(labelText: 'Vertical spacing (mm)', isDense: true, border: OutlineInputBorder()),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: dCtrl,
-                  decoration: const InputDecoration(labelText: 'Hole diameter (mm)', isDense: true, border: OutlineInputBorder()),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                ),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: offsetCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Outline offset (mm)',
-                    helperText: 'Sets outline size to spacing + this much margin on each side. Leave blank to keep the current outline size.',
-                    helperMaxLines: 3,
-                    isDense: true,
-                    border: OutlineInputBorder(),
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setDialogState) => AlertDialog(
+            title: const Text('Quick 4-Hole Pattern'),
+            content: SizedBox(
+              width: 280,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Places 4 holes centered on the outline\'s centerline.'),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: hCtrl,
+                    autofocus: true,
+                    decoration: const InputDecoration(labelText: 'Horizontal spacing (mm)', isDense: true, border: OutlineInputBorder()),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
                   ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
-                ),
-              ],
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: vCtrl,
+                    decoration: const InputDecoration(labelText: 'Vertical spacing (mm)', isDense: true, border: OutlineInputBorder()),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<TemplateMakerHoleShape>(
+                    initialValue: shape,
+                    decoration: const InputDecoration(labelText: 'Hole type', isDense: true, border: OutlineInputBorder()),
+                    items: const [
+                      DropdownMenuItem(value: TemplateMakerHoleShape.round, child: Text('Circle')),
+                      DropdownMenuItem(value: TemplateMakerHoleShape.rect, child: Text('Square')),
+                      DropdownMenuItem(value: TemplateMakerHoleShape.slot, child: Text('Slot')),
+                    ],
+                    onChanged: (value) => setDialogState(() => shape = value ?? TemplateMakerHoleShape.round),
+                  ),
+                  const SizedBox(height: 8),
+                  if (shape == TemplateMakerHoleShape.round)
+                    TextField(
+                      controller: dCtrl,
+                      decoration: const InputDecoration(labelText: 'Hole diameter (mm)', isDense: true, border: OutlineInputBorder()),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                    )
+                  else if (shape == TemplateMakerHoleShape.rect)
+                    TextField(
+                      controller: dCtrl,
+                      decoration: const InputDecoration(labelText: 'Square side (mm)', isDense: true, border: OutlineInputBorder()),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                    )
+                  else ...[
+                    TextField(
+                      controller: lenCtrl,
+                      decoration: const InputDecoration(labelText: 'Slot length (mm)', isDense: true, border: OutlineInputBorder()),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: widthCtrl,
+                      decoration: const InputDecoration(labelText: 'Slot width (mm)', isDense: true, border: OutlineInputBorder()),
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: offsetCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Outline offset (mm)',
+                      helperText: 'Sets outline size to spacing + this much margin on each side. Leave blank to keep the current outline size.',
+                      helperMaxLines: 3,
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
+                  ),
+                ],
+              ),
             ),
+            actions: [
+              TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
+              FilledButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Add')),
+            ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.of(dialogContext).pop(false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.of(dialogContext).pop(true), child: const Text('Add')),
-          ],
         ),
       );
       if (confirmed != true) return;
@@ -1271,12 +1614,18 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         _snack('Outline offset must be a non-negative number, or left blank.');
         return;
       }
+      final double side = (d != null && d > 0) ? d : 4;
+      final len = tryEvalMath(lenCtrl.text);
+      final width = tryEvalMath(widthCtrl.text);
       setState(() {
         _controller.addQuickHolePattern(
           horizontalSpacing: h,
           verticalSpacing: v,
-          diameter: (d != null && d > 0) ? d : 4,
+          diameter: side,
           outlineOffset: offset,
+          shape: shape,
+          slotLength: shape == TemplateMakerHoleShape.rect ? side : ((len != null && len > 0) ? len : 6.0),
+          slotWidth: shape == TemplateMakerHoleShape.rect ? side : ((width != null && width > 0) ? width : 4.0),
         );
         _syncHoleControllers();
         _refreshTopFields();
@@ -1286,6 +1635,8 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       vCtrl.dispose();
       offsetCtrl.dispose();
       dCtrl.dispose();
+      lenCtrl.dispose();
+      widthCtrl.dispose();
     }
   }
 
@@ -1473,58 +1824,111 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: DropdownButtonFormField<TemplateMakerCornerStyle>(
-                        initialValue: _controller.cornerStyle,
-                        decoration: const InputDecoration(labelText: 'Corner style', isDense: true, border: OutlineInputBorder()),
-                        items: const [
-                          DropdownMenuItem(value: TemplateMakerCornerStyle.fillet, child: Text('Fillet')),
-                          DropdownMenuItem(value: TemplateMakerCornerStyle.chamfer, child: Text('Chamfer')),
-                          DropdownMenuItem(value: TemplateMakerCornerStyle.cornerCut, child: Text('Corner cut')),
-                        ],
-                        onChanged: (v) {
-                          if (v != null) setState(() => _controller.setCornerStyle(v));
-                        },
+                CheckboxListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text('Custom outline'),
+                  subtitle: const Text('Click points on the canvas to draw the outline instead of using Corner Style.'),
+                  value: _controller.useCustomOutline,
+                  onChanged: (v) => setState(() {
+                    _controller.setUseCustomOutline(v ?? false);
+                    _addingOutlinePoint = false;
+                  }),
+                ),
+                if (_controller.useCustomOutline) ...[
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: () => setState(() => _addingOutlinePoint = !_addingOutlinePoint),
+                        icon: Icon(_addingOutlinePoint ? Icons.check : Icons.add_location_alt_outlined),
+                        label: Text(_addingOutlinePoint ? 'Done adding points' : 'Add outline point'),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _cornerSizeController,
-                        focusNode: _cornerSizeFocus,
-                        decoration: const InputDecoration(labelText: 'Size (mm)', isDense: true, border: OutlineInputBorder()),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        onChanged: (v) {
-                          final parsed = tryEvalMath(v);
-                          if (parsed != null) {
-                            setState(() {
-                              _controller.setCornerSize(parsed);
-                              _refreshTopFields();
-                            });
-                          }
-                        },
-                        onSubmitted: (_) => _commitMathField(_cornerSizeController, (v) {
-                          _controller.setCornerSize(v);
-                          _refreshTopFields();
-                        }),
-                        onEditingComplete: () => _commitMathField(_cornerSizeController, (v) {
-                          _controller.setCornerSize(v);
-                          _refreshTopFields();
-                        }),
-                        onTapOutside: (_) {
-                          _commitMathField(_cornerSizeController, (v) {
+                      OutlinedButton.icon(
+                        onPressed: _controller.customOutlinePoints.isEmpty
+                            ? null
+                            : () => setState(() {
+                                  _controller.customOutlinePoints.clear();
+                                  _controller.selectOutlinePoint(null);
+                                }),
+                        icon: const Icon(Icons.clear),
+                        label: const Text('Clear points'),
+                      ),
+                      Text('${_controller.customOutlinePoints.length} point'
+                          '${_controller.customOutlinePoints.length == 1 ? '' : 's'}'),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Click a point to select it, then drag to move it. Click Add outline point, then click the '
+                    'canvas to insert new points after the selected one (so click a point on the side you want '
+                    'to extend first) -- or double-click an edge to insert one there without switching modes. '
+                    'Shift+drag a point to grow its fillet/chamfer. Delete removes the selected point. At least '
+                    '3 points are needed to use the shape.',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  if (_controller.selectedOutlinePointIndex != null &&
+                      _controller.selectedOutlinePointIndex! < _controller.customOutlinePoints.length) ...[
+                    const SizedBox(height: 8),
+                    _outlinePointEditor(context, _controller.selectedOutlinePointIndex!),
+                  ],
+                ] else
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: DropdownButtonFormField<TemplateMakerCornerStyle>(
+                          initialValue: _controller.cornerStyle,
+                          decoration: const InputDecoration(labelText: 'Corner style', isDense: true, border: OutlineInputBorder()),
+                          items: const [
+                            DropdownMenuItem(value: TemplateMakerCornerStyle.fillet, child: Text('Fillet')),
+                            DropdownMenuItem(value: TemplateMakerCornerStyle.chamfer, child: Text('Chamfer')),
+                            DropdownMenuItem(value: TemplateMakerCornerStyle.cornerCut, child: Text('Corner cut')),
+                          ],
+                          onChanged: (v) {
+                            if (v != null) setState(() => _controller.setCornerStyle(v));
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: _cornerSizeController,
+                          focusNode: _cornerSizeFocus,
+                          decoration: const InputDecoration(labelText: 'Size (mm)', isDense: true, border: OutlineInputBorder()),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          onChanged: (v) {
+                            final parsed = tryEvalMath(v);
+                            if (parsed != null) {
+                              setState(() {
+                                _controller.setCornerSize(parsed);
+                                _refreshTopFields();
+                              });
+                            }
+                          },
+                          onSubmitted: (_) => _commitMathField(_cornerSizeController, (v) {
                             _controller.setCornerSize(v);
                             _refreshTopFields();
-                          });
-                          _cornerSizeFocus.unfocus();
-                        },
+                          }),
+                          onEditingComplete: () => _commitMathField(_cornerSizeController, (v) {
+                            _controller.setCornerSize(v);
+                            _refreshTopFields();
+                          }),
+                          onTapOutside: (_) {
+                            _commitMathField(_cornerSizeController, (v) {
+                              _controller.setCornerSize(v);
+                              _refreshTopFields();
+                            });
+                            _cornerSizeFocus.unfocus();
+                          },
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
                 const Divider(height: 32),
                 _referenceImageSection(context),
                 const Divider(height: 32),
@@ -1679,6 +2083,10 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                           outlineHeight: _controller.outlineHeight,
                           cornerStyle: _controller.cornerStyle,
                           cornerSize: _controller.cornerSize,
+                          useCustomOutline: _controller.useCustomOutline,
+                          customOutlinePoints: [for (final v in _controller.customOutlinePoints) v.position],
+                          customOutlineDisplayPoints: _controller.customOutlineDisplayPoints(),
+                          selectedOutlinePointIndex: _controller.selectedOutlinePointIndex,
                           holes: [
                             for (final h in _controller.holes)
                               (

@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:box_design_flutter/models/controller_template.dart';
@@ -151,6 +154,26 @@ void main() {
     expect(controller.outlineHeight, closeTo(150, 1e-9));
   });
 
+  test('addQuickHolePattern can place square or slot holes', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(100)
+      ..setOutlineHeight(60)
+      ..addQuickHolePattern(
+        horizontalSpacing: 80,
+        verticalSpacing: 40,
+        shape: TemplateMakerHoleShape.rect,
+        slotLength: 6,
+        slotWidth: 6,
+      );
+
+    expect(controller.holes, hasLength(4));
+    for (final h in controller.holes) {
+      expect(h.shape, TemplateMakerHoleShape.rect);
+      expect(h.slotLength, 6);
+      expect(h.slotWidth, 6);
+    }
+  });
+
   test('toTemplate carries category and holes through unchanged', () {
     final controller = TemplateMakerController()
       ..setOutlineWidth(80)
@@ -298,5 +321,322 @@ void main() {
     expect(loadedHole.slotLength, closeTo(18, 1e-6));
     expect(loadedHole.slotWidth, closeTo(5, 1e-6));
     expect(loadedHole.rotationDeg, closeTo(35, 1e-6));
+  });
+
+  test('setUseCustomOutline seeds the current rectangle corners the first time it is turned on', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setUseCustomOutline(true);
+
+    expect(controller.customOutlinePoints.map((v) => v.position), [
+      const Vec2(0, 0),
+      const Vec2(80, 0),
+      const Vec2(80, 50),
+      const Vec2(0, 50),
+    ]);
+  });
+
+  test('a custom outline with 3+ points replaces the parametric rectangle in toTemplate', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setUseCustomOutline(true);
+    controller.addOutlinePointAt(const Vec2(40, 60));
+
+    final outline = controller.toTemplate().entities.first as DxfPolyline;
+    expect(outline.vertices, hasLength(5));
+    expect(outline.vertices.every((v) => v.bulge == 0), isTrue);
+    expect(outline.vertices.last.point, const Vec2(40, 60));
+  });
+
+  test('a custom outline with fewer than 3 points falls back to the parametric rectangle', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50);
+    controller.useCustomOutline = true;
+    controller.customOutlinePoints = [OutlineVertex(const Vec2(0, 0)), OutlineVertex(const Vec2(80, 0))];
+
+    final outline = controller.toTemplate().entities.first as DxfPolyline;
+    expect(outline.vertices, hasLength(4));
+  });
+
+  test('moveOutlinePoint and removeOutlinePoint edit the custom outline in place', () {
+    final controller = TemplateMakerController()..setUseCustomOutline(true);
+    controller.moveOutlinePoint(0, const Vec2(-5, -5));
+    expect(controller.customOutlinePoints[0].position, const Vec2(-5, -5));
+
+    controller.removeOutlinePoint(1);
+    expect(controller.customOutlinePoints, hasLength(3));
+    expect(controller.selectedOutlinePointIndex, isNull);
+  });
+
+  test('loadFromTemplate round-trips a hand-drawn straight-edge custom outline', () {
+    final points = [
+      const Vec2(0, 0),
+      const Vec2(80, 0),
+      const Vec2(80, 30),
+      const Vec2(60, 30),
+      const Vec2(60, 50),
+      const Vec2(0, 50),
+    ];
+    final template = ControllerTemplate(
+      id: 'notched',
+      name: 'Notched',
+      entities: [DxfPolyline([for (final p in points) PolyVertex(p)], closed: true)],
+      source: TemplateSource.imported,
+      category: TemplateCategory.controllerAddon,
+    );
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isTrue);
+    expect(loaded.customOutlinePoints.map((v) => v.position), points);
+    expect(loaded.customOutlinePoints.every((v) => v.style == OutlineCornerStyle.sharp), isTrue);
+  });
+
+  test('dual-layer plates keep independent custom outlines across a layer swap', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setDualLayer(true)
+      ..setUseCustomOutline(true);
+    controller.addOutlinePointAt(const Vec2(40, 60));
+    final layer1Points = List.of(controller.customOutlinePoints);
+
+    controller.selectLayer(TemplateMakerLayer.layer2);
+    expect(controller.useCustomOutline, isFalse); // layer 2 starts as its own plain rectangle
+
+    controller.selectLayer(TemplateMakerLayer.layer1);
+    expect(controller.useCustomOutline, isTrue);
+    expect(controller.customOutlinePoints, layer1Points);
+  });
+
+  test('a fillet on a 90-degree custom-outline corner matches the rectangle corner-style math', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setUseCustomOutline(true);
+    // Point 1 is (80, 0) -- a 90-degree corner, same angle as the
+    // parametric rectangle's own corners.
+    controller.setOutlinePointStyle(1, OutlineCornerStyle.fillet);
+    controller.setOutlinePointSize(1, 10);
+
+    final outline = controller.toTemplate().entities.first as DxfPolyline;
+    expect(outline.vertices, hasLength(5));
+    final filletVertex = outline.vertices.firstWhere((v) => v.bulge != 0);
+    expect(filletVertex.point.x, closeTo(70, 1e-9));
+    expect(filletVertex.point.y, closeTo(0, 1e-9));
+    expect(filletVertex.bulge, closeTo(0.4142135623730951, 1e-9)); // tan(22.5deg)
+    final nextVertex = outline.vertices[outline.vertices.indexOf(filletVertex) + 1];
+    expect(nextVertex.point.x, closeTo(80, 1e-9));
+    expect(nextVertex.point.y, closeTo(10, 1e-9));
+  });
+
+  test('a chamfer on a custom-outline corner cuts a straight segment with no bulge', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setUseCustomOutline(true);
+    controller.setOutlinePointStyle(1, OutlineCornerStyle.chamfer);
+    controller.setOutlinePointSize(1, 10);
+
+    final outline = controller.toTemplate().entities.first as DxfPolyline;
+    expect(outline.vertices, hasLength(5));
+    expect(outline.vertices.every((v) => v.bulge == 0), isTrue);
+    final points = outline.vertices.map((v) => v.point).toList();
+    expect(points, contains(const Vec2(70, 0)));
+    expect(points, contains(const Vec2(80, 10)));
+  });
+
+  test('a sharp outline point ignores any size', () {
+    final controller = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setUseCustomOutline(true);
+    controller.setOutlinePointSize(1, 10); // style stays sharp (the default)
+
+    final outline = controller.toTemplate().entities.first as DxfPolyline;
+    expect(outline.vertices, hasLength(4));
+    expect(outline.vertices.every((v) => v.bulge == 0), isTrue);
+  });
+
+  test('insertOutlinePointAfter puts the new point in path order, not at the end', () {
+    final controller = TemplateMakerController()..setUseCustomOutline(true);
+    final points = controller.customOutlinePoints;
+    final between = Vec2(
+      (points[0].position.x + points[1].position.x) / 2,
+      (points[0].position.y + points[1].position.y) / 2,
+    );
+
+    final index = controller.insertOutlinePointAfter(0, between);
+
+    expect(index, 1);
+    expect(controller.customOutlinePoints[1].position, between);
+    expect(controller.customOutlinePoints, hasLength(5));
+  });
+
+  test('addOutlinePointAt nudges a point that would land exactly on an existing one', () {
+    final controller = TemplateMakerController()..setUseCustomOutline(true);
+    final existing = controller.customOutlinePoints[0].position;
+
+    controller.addOutlinePointAt(existing);
+
+    final added = controller.customOutlinePoints.last.position;
+    expect((added.x - existing.x).abs() + (added.y - existing.y).abs(), greaterThan(0));
+  });
+
+  test('toTemplate/loadFromTemplate round-trips an unmodified 4-point custom outline', () {
+    // A plain, unmodified custom outline is geometrically identical to a
+    // sharp-cornered rectangle -- the round-trip metadata is what tells
+    // loadFromTemplate this was actually a custom outline, not a plain one.
+    final original = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setUseCustomOutline(true);
+    final template = original.toTemplate();
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isTrue);
+    expect(loaded.customOutlinePoints.map((v) => v.position), [
+      const Vec2(0, 0),
+      const Vec2(80, 0),
+      const Vec2(80, 50),
+      const Vec2(0, 50),
+    ]);
+  });
+
+  test('toTemplate/loadFromTemplate round-trips a filleted custom-outline point exactly', () {
+    final original = TemplateMakerController()
+      ..setOutlineWidth(80)
+      ..setOutlineHeight(50)
+      ..setUseCustomOutline(true);
+    original.setOutlinePointStyle(1, OutlineCornerStyle.fillet);
+    original.setOutlinePointSize(1, 10);
+    final template = original.toTemplate();
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isTrue);
+    expect(loaded.customOutlinePoints, hasLength(4));
+    expect(loaded.customOutlinePoints[1].position, const Vec2(80, 0));
+    expect(loaded.customOutlinePoints[1].style, OutlineCornerStyle.fillet);
+    expect(loaded.customOutlinePoints[1].size, 10);
+    // And it still produces the identical treated geometry after reloading.
+    final reExported = loaded.toTemplate().entities.first as DxfPolyline;
+    final originalExported = template.entities.first as DxfPolyline;
+    expect(reExported.vertices.length, originalExported.vertices.length);
+  });
+
+  test('a template without round-trip metadata still loads via the geometric fallback', () {
+    // Templates saved before this metadata existed (or hand-authored/DXF
+    // imports) have no templateMakerCustomOutline field at all.
+    final points = [
+      const Vec2(0, 0),
+      const Vec2(80, 0),
+      const Vec2(80, 30),
+      const Vec2(60, 30),
+      const Vec2(60, 50),
+      const Vec2(0, 50),
+    ];
+    final template = ControllerTemplate(
+      id: 'notched',
+      name: 'Notched',
+      entities: [DxfPolyline([for (final p in points) PolyVertex(p)], closed: true)],
+      source: TemplateSource.imported,
+      category: TemplateCategory.controllerAddon,
+    );
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isTrue);
+    expect(loaded.customOutlinePoints.map((v) => v.position), points);
+  });
+
+  void expectAssetOpensAsCustomOutline(String assetPath, int expectedCorners) {
+    final json = jsonDecode(File(assetPath).readAsStringSync()) as Map<String, dynamic>;
+    final template = ControllerTemplate.fromJson(json, source: TemplateSource.builtIn);
+    final originalOutline = template.entities.first as DxfPolyline;
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isTrue);
+    expect(loaded.customOutlinePoints, hasLength(expectedCorners));
+    expect(loaded.customOutlinePoints.every((v) => v.style == OutlineCornerStyle.fillet), isTrue);
+
+    // Re-exporting the reconstructed corners must reproduce the bundled
+    // asset's actual outline geometry: same vertices, same bulges. The
+    // reconstructed polygon may start at a different (but equivalent)
+    // vertex, so compare as a set rather than by index; bulge is rounded
+    // since the asset stores a truncated literal (0.41421356) while the
+    // reconstruction recomputes the exact value (tan(22.5deg)).
+    final reExported = loaded.toTemplate().entities.first as DxfPolyline;
+    String key(PolyVertex v) =>
+        '${v.point.x.toStringAsFixed(3)},${v.point.y.toStringAsFixed(3)},${v.bulge.toStringAsFixed(4)}';
+    expect(reExported.vertices.map(key).toSet(), originalOutline.vertices.map(key).toSet());
+  }
+
+  test('yps_large_box.json opens as its 8-corner custom outline and reproduces the same shape', () {
+    expectAssetOpensAsCustomOutline('assets/templates/yps_large_box.json', 8);
+  });
+
+  test('yps_medium_box.json opens as its 8-corner custom outline and reproduces the same shape', () {
+    expectAssetOpensAsCustomOutline('assets/templates/yps_medium_box.json', 8);
+  });
+
+  test(
+      'a DXF/JSON import with mixed fillet radii and no round-trip metadata still reconstructs as a '
+      'custom outline via the general geometric fallback', () {
+    // Same outline as yps_large_box.json's entities, but as a template that
+    // has never been through the Template Maker (no
+    // templateMakerCustomOutline metadata) -- e.g. a fresh DXF import.
+    final json = jsonDecode(File('assets/templates/yps_large_box.json').readAsStringSync()) as Map<String, dynamic>
+      ..remove('templateMakerCustomOutline');
+    final template = ControllerTemplate.fromJson(json, source: TemplateSource.imported);
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isTrue);
+    expect(loaded.customOutlinePoints, hasLength(8));
+    expect(loaded.customOutlinePoints.map((v) => v.size.toStringAsFixed(3)).toSet(), {'6.500', '10.000', '2.000'});
+  });
+
+  test('the general fillet fallback handles a non-90-degree corner correctly', () {
+    // A right triangle (0,0)-(20,0)-(0,20) with its right-angle corner at
+    // the origin filleted (radius 3) and its 45-degree corner at (0,20)
+    // sharp -- exercises an angle the uniform-rectangle patterns never hit.
+    final controller = TemplateMakerController()
+      ..customOutlinePoints = [
+        OutlineVertex(const Vec2(0, 0), style: OutlineCornerStyle.fillet, size: 3),
+        OutlineVertex(const Vec2(20, 0)),
+        OutlineVertex(const Vec2(0, 20)),
+      ]
+      ..useCustomOutline = true;
+    final template = controller.toTemplate();
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isTrue);
+    expect(loaded.customOutlinePoints, hasLength(3));
+    final filleted = loaded.customOutlinePoints.firstWhere((v) => v.style == OutlineCornerStyle.fillet);
+    expect(filleted.position.x, closeTo(0, 1e-6));
+    expect(filleted.position.y, closeTo(0, 1e-6));
+    expect(filleted.size, closeTo(3, 1e-6));
+  });
+
+  test('the general fillet fallback bails out (falls back to a plain rectangle) on two adjacent bulges', () {
+    final entities = [
+      DxfPolyline([
+        const PolyVertex(Vec2(0, 0), bulge: 0.4142135623730951),
+        const PolyVertex(Vec2(10, 0), bulge: 0.4142135623730951), // back-to-back arcs -- not decomposable
+        const PolyVertex(Vec2(10, 10)),
+        const PolyVertex(Vec2(0, 10)),
+      ], closed: true),
+    ];
+    final template = ControllerTemplate(
+      id: 'weird',
+      name: 'Weird',
+      entities: entities,
+      source: TemplateSource.imported,
+      category: TemplateCategory.controllerAddon,
+    );
+
+    final loaded = TemplateMakerController()..loadFromTemplate(template);
+    expect(loaded.useCustomOutline, isFalse);
+    expect(loaded.cornerSize, 0);
   });
 }

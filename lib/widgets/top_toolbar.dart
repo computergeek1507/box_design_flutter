@@ -10,6 +10,7 @@ import '../services/project_io.dart';
 import '../services/stl_export.dart';
 import '../services/theme_settings.dart';
 import '../services/threemf_export.dart';
+import '../services/units.dart';
 import '../template_maker/template_maker_screen.dart';
 
 enum _ExportFormat { dxf, pdf, stl, threeMf }
@@ -93,7 +94,7 @@ class _TopToolbarState extends State<TopToolbar> {
       final dx = end.x - start.x;
       final dy = end.y - start.y;
       final distance = math.sqrt(dx * dx + dy * dy);
-      label = 'ΔX ${dx.toStringAsFixed(2)}  ΔY ${dy.toStringAsFixed(2)}  ${distance.toStringAsFixed(2)} mm';
+      label = 'ΔX ${mmWithInches(dx)}  ΔY ${mmWithInches(dy)}  ${mmWithInches(distance)}';
     } else if (start != null) {
       label = 'Click a second point…';
     }

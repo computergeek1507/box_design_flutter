@@ -8,6 +8,7 @@ import '../geometry/tessellate.dart';
 import '../models/box_project.dart';
 import '../models/dxf_entity.dart';
 import '../models/vec2.dart';
+import '../services/units.dart';
 import 'design_controller.dart';
 import 'note_paint.dart';
 
@@ -117,8 +118,8 @@ class DesignPainter extends CustomPainter {
 
     final deltaMm = end.subtract(start);
     final distanceMm = math.sqrt(deltaMm.x * deltaMm.x + deltaMm.y * deltaMm.y);
-    final label = 'ΔX ${deltaMm.x.toStringAsFixed(2)}  ΔY ${deltaMm.y.toStringAsFixed(2)}\n'
-        '${distanceMm.toStringAsFixed(2)} mm';
+    final label = 'ΔX ${mmWithInches(deltaMm.x)}  ΔY ${mmWithInches(deltaMm.y)}\n'
+        '${mmWithInches(distanceMm)}';
     final textPainter = TextPainter(
       text: TextSpan(
         text: label,

@@ -7,6 +7,7 @@ import '../design/note_paint.dart';
 import '../models/annotation.dart';
 import '../models/dxf_entity.dart';
 import '../models/vec2.dart';
+import '../services/units.dart';
 import 'template_maker_controller.dart';
 
 /// Scale-to-fit preview of a template being built: the outline rectangle
@@ -19,6 +20,18 @@ class TemplateOutlinePainter extends CustomPainter {
   final double outlineHeight;
   final TemplateMakerCornerStyle cornerStyle;
   final double cornerSize;
+
+  /// When set, [customOutlineDisplayPoints] is drawn as the outline instead
+  /// of the Width/Height/Corner Style rectangle (which is still shown faded
+  /// underneath, as a placement reference). [customOutlinePoints] are the
+  /// raw, draggable corner positions (markers), separate from the actual
+  /// drawn shape since a point's own fillet/chamfer replaces its sharp
+  /// corner with an arc or cut in [customOutlineDisplayPoints].
+  final bool useCustomOutline;
+  final List<Vec2> customOutlinePoints;
+  final List<Vec2> customOutlineDisplayPoints;
+  final int? selectedOutlinePointIndex;
+
   final List<
       ({
         TemplateMakerHoleShape shape,
@@ -102,6 +115,10 @@ class TemplateOutlinePainter extends CustomPainter {
     required this.outlineHeight,
     this.cornerStyle = TemplateMakerCornerStyle.fillet,
     this.cornerSize = 0,
+    this.useCustomOutline = false,
+    this.customOutlinePoints = const [],
+    this.customOutlineDisplayPoints = const [],
+    this.selectedOutlinePointIndex,
     required this.holes,
   });
 
@@ -157,18 +174,48 @@ class TemplateOutlinePainter extends CustomPainter {
       ..color = (isDark ? Colors.white : Colors.black).withValues(alpha: drawingMode ? 0.3 : 1.0)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2;
-    final cornerAmount = cornerSize <= 0 ? 0.0 : math.min(cornerSize, math.min(outlineWidth, outlineHeight) / 2);
-    if (cornerAmount <= 0) {
-      canvas.drawRect(Rect.fromPoints(toPx(const Vec2(0, 0)), toPx(Vec2(outlineWidth, outlineHeight))), outlinePaint);
-    } else if (cornerStyle == TemplateMakerCornerStyle.fillet) {
-      final outlineRect = Rect.fromPoints(toPx(const Vec2(0, 0)), toPx(Vec2(outlineWidth, outlineHeight)));
-      canvas.drawRRect(RRect.fromRectAndRadius(outlineRect, Radius.circular(cornerAmount * scale)), outlinePaint);
+    if (useCustomOutline) {
+      // The plain rectangle stays visible, faded, as a placement reference
+      // while the custom outline is built/edited.
+      final refPaint = Paint()
+        ..color = (isDark ? Colors.white : Colors.black).withValues(alpha: 0.25)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1;
+      canvas.drawRect(Rect.fromPoints(toPx(const Vec2(0, 0)), toPx(Vec2(outlineWidth, outlineHeight))), refPaint);
+      if (customOutlineDisplayPoints.length >= 2) {
+        final pts = customOutlineDisplayPoints.map(toPx).toList();
+        canvas.drawPath(Path()..addPolygon(pts, customOutlinePoints.length >= 3), outlinePaint);
+      }
+      if (customOutlinePoints.isNotEmpty) {
+        final markerPts = customOutlinePoints.map(toPx).toList();
+        final pointFill = Paint()..color = isDark ? Colors.black : Colors.white;
+        for (var i = 0; i < markerPts.length; i++) {
+          final selected = i == selectedOutlinePointIndex;
+          final r = Rect.fromCenter(center: markerPts[i], width: 9, height: 9);
+          canvas.drawRect(r, pointFill);
+          canvas.drawRect(
+            r,
+            Paint()
+              ..color = selected ? Colors.lightBlue : outlinePaint.color
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = selected ? 2.5 : 1.5,
+          );
+        }
+      }
     } else {
-      final vertices = cornerStyle == TemplateMakerCornerStyle.chamfer
-          ? chamferedRectVertices(outlineWidth, outlineHeight, cornerAmount)
-          : notchedRectVertices(outlineWidth, outlineHeight, cornerAmount);
-      final pts = vertices.map((v) => toPx(v.point)).toList();
-      canvas.drawPath(Path()..addPolygon(pts, true), outlinePaint);
+      final cornerAmount = cornerSize <= 0 ? 0.0 : math.min(cornerSize, math.min(outlineWidth, outlineHeight) / 2);
+      if (cornerAmount <= 0) {
+        canvas.drawRect(Rect.fromPoints(toPx(const Vec2(0, 0)), toPx(Vec2(outlineWidth, outlineHeight))), outlinePaint);
+      } else if (cornerStyle == TemplateMakerCornerStyle.fillet) {
+        final outlineRect = Rect.fromPoints(toPx(const Vec2(0, 0)), toPx(Vec2(outlineWidth, outlineHeight)));
+        canvas.drawRRect(RRect.fromRectAndRadius(outlineRect, Radius.circular(cornerAmount * scale)), outlinePaint);
+      } else {
+        final vertices = cornerStyle == TemplateMakerCornerStyle.chamfer
+            ? chamferedRectVertices(outlineWidth, outlineHeight, cornerAmount)
+            : notchedRectVertices(outlineWidth, outlineHeight, cornerAmount);
+        final pts = vertices.map((v) => toPx(v.point)).toList();
+        canvas.drawPath(Path()..addPolygon(pts, true), outlinePaint);
+      }
     }
 
     final holePaint = Paint()
@@ -341,8 +388,8 @@ class TemplateOutlinePainter extends CustomPainter {
       canvas.drawCircle(p, 3, Paint()..color = color);
     }
     final d = end.subtract(start);
-    final label = '\u0394X ${d.x.toStringAsFixed(2)}  \u0394Y ${d.y.toStringAsFixed(2)}\n'
-        '${math.sqrt(d.x * d.x + d.y * d.y).toStringAsFixed(2)} mm';
+    final label = '\u0394X ${mmWithInches(d.x)}  \u0394Y ${mmWithInches(d.y)}\n'
+        '${mmWithInches(math.sqrt(d.x * d.x + d.y * d.y))}';
     final tp = TextPainter(
       text: TextSpan(text: label, style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
       textAlign: TextAlign.center,
@@ -392,6 +439,10 @@ class TemplateOutlinePainter extends CustomPainter {
         oldDelegate.outlineHeight != outlineHeight ||
         oldDelegate.cornerStyle != cornerStyle ||
         oldDelegate.cornerSize != cornerSize ||
+        oldDelegate.useCustomOutline != useCustomOutline ||
+        oldDelegate.customOutlinePoints != customOutlinePoints ||
+        oldDelegate.customOutlineDisplayPoints != customOutlineDisplayPoints ||
+        oldDelegate.selectedOutlinePointIndex != selectedOutlinePointIndex ||
         oldDelegate.holes != holes;
   }
 }

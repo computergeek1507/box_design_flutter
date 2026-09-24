@@ -250,7 +250,7 @@ class _BoxCanvasState extends State<BoxCanvas> {
   void _moveItem(String id, Vec2 deltaMm) {
     for (final p in controller.project.placedTemplates) {
       if (p.id == id) {
-        controller.movePlacedTemplate(id, p.position.add(deltaMm));
+        controller.movePlacedTemplate(id, controller.snapToGrid(p.position.add(deltaMm)));
         return;
       }
     }
@@ -258,7 +258,7 @@ class _BoxCanvasState extends State<BoxCanvas> {
       if (h.id == id) {
         controller.updateHole(
           id,
-          (hole) => hole.copyWith(position: hole.position.add(deltaMm)),
+          (hole) => hole.copyWith(position: controller.snapToGrid(hole.position.add(deltaMm))),
         );
         return;
       }

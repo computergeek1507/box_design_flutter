@@ -35,6 +35,19 @@ class ControllerTemplate {
   /// convention as [entities] (bounding box min corner at (0, 0)).
   final List<DxfEntity>? layer2Entities;
 
+  /// Template-Maker-only round-trip metadata for a custom (click-to-draw)
+  /// outline: one `{x, y, style, size}` map per point, [style] being an
+  /// [OutlineCornerStyle] name. Reopening in the Template Maker uses this
+  /// directly instead of reverse-engineering points back out of [entities]/
+  /// [layer2Entities] -- which loses fillets/chamfers (flattened to arcs and
+  /// extra straight vertices) and can't tell an unmodified 4-point custom
+  /// outline from a plain rectangle. Nothing outside the Template Maker
+  /// reads these fields; every other consumer (rendering, export, mesh
+  /// cutting) uses [entities]/[layer2Entities], which always hold the
+  /// actual flattened shape regardless of whether this is present.
+  final List<Map<String, dynamic>>? templateMakerCustomOutline;
+  final List<Map<String, dynamic>>? templateMakerCustomOutlineLayer2;
+
   ControllerTemplate({
     required this.id,
     required this.name,
@@ -43,6 +56,8 @@ class ControllerTemplate {
     required this.category,
     this.annotations = const [],
     this.layer2Entities,
+    this.templateMakerCustomOutline,
+    this.templateMakerCustomOutlineLayer2,
   });
 
   BoundingBox get boundingBox => entitiesBoundingBox(entities);
@@ -54,6 +69,8 @@ class ControllerTemplate {
         'entities': entitiesToJson(entities),
         if (layer2Entities != null) 'layer2Entities': entitiesToJson(layer2Entities!),
         if (annotations.isNotEmpty) 'annotations': [for (final a in annotations) a.toJson()],
+        if (templateMakerCustomOutline != null) 'templateMakerCustomOutline': templateMakerCustomOutline,
+        if (templateMakerCustomOutlineLayer2 != null) 'templateMakerCustomOutlineLayer2': templateMakerCustomOutlineLayer2,
       };
 
   factory ControllerTemplate.fromJson(Map<String, dynamic> json, {required TemplateSource source}) {
@@ -68,6 +85,12 @@ class ControllerTemplate {
         for (final a in json['annotations'] as List<dynamic>? ?? const [])
           Annotation.fromJson(a as Map<String, dynamic>),
       ],
+      templateMakerCustomOutline: (json['templateMakerCustomOutline'] as List<dynamic>?)
+          ?.map((e) => (e as Map).cast<String, dynamic>())
+          .toList(),
+      templateMakerCustomOutlineLayer2: (json['templateMakerCustomOutlineLayer2'] as List<dynamic>?)
+          ?.map((e) => (e as Map).cast<String, dynamic>())
+          .toList(),
     );
   }
 }

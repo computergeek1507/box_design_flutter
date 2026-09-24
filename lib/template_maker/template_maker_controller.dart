@@ -51,6 +51,23 @@ class TemplateMakerHole {
 /// plate, the second plate of a two-layer box, or the drawing layer (notes).
 enum TemplateMakerLayer { layer1, layer2, drawing }
 
+/// How a single custom-outline point's corner is treated -- unlike the
+/// parametric rectangle's single outline-wide [TemplateMakerCornerStyle],
+/// each point on a custom outline chooses this independently.
+enum OutlineCornerStyle { sharp, fillet, chamfer }
+
+/// A single point on a custom (click-to-draw) outline: its position, plus
+/// its own corner treatment. [size] is the fillet radius or the chamfer's
+/// cut distance along each adjacent edge; ignored (and shown as 0) when
+/// [style] is sharp.
+class OutlineVertex {
+  Vec2 position;
+  OutlineCornerStyle style;
+  double size;
+
+  OutlineVertex(this.position, {this.style = OutlineCornerStyle.sharp, this.size = 0});
+}
+
 /// One note on the drawing layer being edited; see [Annotation] for what
 /// each field means per [type].
 class TemplateMakerNote {
@@ -127,8 +144,18 @@ class _Plate {
   final TemplateMakerCornerStyle cornerStyle;
   final double cornerSize;
   final List<TemplateMakerHole> holes;
+  final bool useCustomOutline;
+  final List<OutlineVertex> customOutlinePoints;
 
-  _Plate(this.outlineWidth, this.outlineHeight, this.cornerStyle, this.cornerSize, this.holes);
+  _Plate(
+    this.outlineWidth,
+    this.outlineHeight,
+    this.cornerStyle,
+    this.cornerSize,
+    this.holes, {
+    this.useCustomOutline = false,
+    this.customOutlinePoints = const [],
+  });
 }
 
 /// A [length] x [width] rectangle centered on the origin with its long axis
@@ -188,6 +215,17 @@ double _dist(Vec2 a, Vec2 b) {
   return math.sqrt(dx * dx + dy * dy);
 }
 
+/// The intersection of the infinite line through [p1]/[p2] and the infinite
+/// line through [p3]/[p4], or null if they're parallel (or nearly so).
+Vec2? _lineIntersection(Vec2 p1, Vec2 p2, Vec2 p3, Vec2 p4) {
+  final d1x = p2.x - p1.x, d1y = p2.y - p1.y;
+  final d2x = p4.x - p3.x, d2y = p4.y - p3.y;
+  final denom = d1x * d2y - d1y * d2x;
+  if (denom.abs() < 1e-9) return null;
+  final t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / denom;
+  return Vec2(p1.x + t * d1x, p1.y + t * d1y);
+}
+
 /// Backs the template maker screen: an outline rectangle (width/height,
 /// optionally corner-filleted or corner-notched) plus a flat list of round
 /// or slot holes, convertible to/from the same [ControllerTemplate] JSON
@@ -203,6 +241,15 @@ class TemplateMakerController extends ChangeNotifier {
   TemplateMakerCornerStyle cornerStyle = TemplateMakerCornerStyle.fillet;
   double cornerSize = 0;
   final List<TemplateMakerHole> holes = [];
+
+  /// When on, the outline is this closed straight-edge polygon (built by
+  /// clicking points on the canvas) instead of the Width/Height/Corner
+  /// Style rectangle -- Width/Height still drive the faded reference
+  /// rectangle shown while editing and other placement math (e.g. default
+  /// hole position), but no longer describe the actual outline shape.
+  bool useCustomOutline = false;
+  List<OutlineVertex> customOutlinePoints = [];
+  int? selectedOutlinePointIndex;
 
   /// Optional tracing overlay (a screenshot/drawing to line the outline and
   /// holes up against). Positioned by its bottom-left corner and sized in
@@ -266,7 +313,7 @@ class TemplateMakerController extends ChangeNotifier {
   }
 
   /// Grid and drag snapping. The grid is anchored at the plate's (0, 0) corner.
-  static const gridSizesMm = [1.0, 2.0, 5.0, 10.0, 20.0];
+  static const gridSizesMm = [0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0];
   bool showGrid = true;
   bool snapToGrid = true;
 
@@ -372,8 +419,93 @@ class TemplateMakerController extends ChangeNotifier {
   String? selectedHoleId;
 
   void selectHole(String? holeId) {
-    if (selectedHoleId == holeId) return;
+    if (selectedHoleId == holeId && selectedOutlinePointIndex == null) return;
     selectedHoleId = holeId;
+    selectedOutlinePointIndex = null;
+    notifyListeners();
+  }
+
+  /// Turns custom-outline mode on/off for the plate being edited. Turning it
+  /// on for the first time seeds the current rectangle's four corners, so
+  /// there's a shape to start editing instead of nothing.
+  void setUseCustomOutline(bool value) {
+    useCustomOutline = value;
+    if (value && customOutlinePoints.length < 3) {
+      customOutlinePoints = [
+        OutlineVertex(const Vec2(0, 0)),
+        OutlineVertex(Vec2(outlineWidth, 0)),
+        OutlineVertex(Vec2(outlineWidth, outlineHeight)),
+        OutlineVertex(Vec2(0, outlineHeight)),
+      ];
+    }
+    selectedOutlinePointIndex = null;
+    notifyListeners();
+  }
+
+  /// Appends a new outline point (e.g. from a click on the canvas with none
+  /// selected) and returns its index.
+  int addOutlinePointAt(Vec2 p) {
+    customOutlinePoints.add(OutlineVertex(_nudgeIfDuplicate(p)));
+    final index = customOutlinePoints.length - 1;
+    selectedOutlinePointIndex = index;
+    selectedHoleId = null;
+    notifyListeners();
+    return index;
+  }
+
+  /// Inserts a new point on the outline right after [afterIndex] (e.g. a
+  /// double-click landing on an edge between two existing points, or the
+  /// next click while adding points with one already selected) and returns
+  /// its index -- unlike [addOutlinePointAt], this keeps the new point in
+  /// its correct place along the path instead of appending it at the end.
+  int insertOutlinePointAfter(int afterIndex, Vec2 p) {
+    final insertAt = (afterIndex + 1).clamp(0, customOutlinePoints.length);
+    customOutlinePoints.insert(insertAt, OutlineVertex(_nudgeIfDuplicate(p)));
+    selectedOutlinePointIndex = insertAt;
+    selectedHoleId = null;
+    notifyListeners();
+    return insertAt;
+  }
+
+  /// A point that would land exactly on an existing one (typically from
+  /// snapping onto a nearby corner) is nudged clear so it's a distinct,
+  /// visible, draggable point instead of an invisible duplicate.
+  Vec2 _nudgeIfDuplicate(Vec2 p) {
+    if (customOutlinePoints.any((v) => _dist(v.position, p) < 0.05)) {
+      return Vec2(p.x + 1, p.y + 1);
+    }
+    return p;
+  }
+
+  void moveOutlinePoint(int index, Vec2 p) {
+    if (index < 0 || index >= customOutlinePoints.length) return;
+    customOutlinePoints[index].position = p;
+    notifyListeners();
+  }
+
+  void setOutlinePointStyle(int index, OutlineCornerStyle style) {
+    if (index < 0 || index >= customOutlinePoints.length) return;
+    customOutlinePoints[index].style = style;
+    notifyListeners();
+  }
+
+  void setOutlinePointSize(int index, double size) {
+    if (index < 0 || index >= customOutlinePoints.length) return;
+    customOutlinePoints[index].size = math.max(0, size);
+    notifyListeners();
+  }
+
+  void removeOutlinePoint(int index) {
+    if (index < 0 || index >= customOutlinePoints.length) return;
+    customOutlinePoints.removeAt(index);
+    selectedOutlinePointIndex = null;
+    notifyListeners();
+  }
+
+  void selectOutlinePoint(int? index) {
+    if (selectedOutlinePointIndex == index) return;
+    selectedOutlinePointIndex = index;
+    if (index != null) selectedHoleId = null;
     notifyListeners();
   }
 
@@ -483,6 +615,9 @@ class TemplateMakerController extends ChangeNotifier {
     required double verticalSpacing,
     double diameter = 4,
     double? outlineOffset,
+    TemplateMakerHoleShape shape = TemplateMakerHoleShape.round,
+    double slotLength = 12,
+    double slotWidth = 4,
   }) {
     if (outlineOffset != null) {
       setOutlineWidth(horizontalSpacing + outlineOffset * 2);
@@ -498,7 +633,10 @@ class TemplateMakerController extends ChangeNotifier {
           id: 'hole${_nextHoleSeq++}',
           x: cx + dx,
           y: cy + dy,
+          shape: shape,
           diameter: diameter,
+          slotLength: slotLength,
+          slotWidth: slotWidth,
         ));
       }
     }
@@ -831,7 +969,15 @@ class TemplateMakerController extends ChangeNotifier {
     return added;
   }
 
-  _Plate _snapshotFields() => _Plate(outlineWidth, outlineHeight, cornerStyle, cornerSize, holes);
+  _Plate _snapshotFields() => _Plate(
+        outlineWidth,
+        outlineHeight,
+        cornerStyle,
+        cornerSize,
+        holes,
+        useCustomOutline: useCustomOutline,
+        customOutlinePoints: customOutlinePoints,
+      );
 
   TemplateMakerHole _cloneHole(TemplateMakerHole h) => TemplateMakerHole(
         id: 'hole${_nextHoleSeq++}',
@@ -844,26 +990,47 @@ class TemplateMakerController extends ChangeNotifier {
         rotationDeg: h.rotationDeg,
       );
 
+  OutlineVertex _cloneOutlineVertex(OutlineVertex v) => OutlineVertex(v.position, style: v.style, size: v.size);
+
   void _swapPlateFields() {
     final other = _stored!;
-    final mine = _Plate(outlineWidth, outlineHeight, cornerStyle, cornerSize, List.of(holes));
+    final mine = _Plate(
+      outlineWidth,
+      outlineHeight,
+      cornerStyle,
+      cornerSize,
+      List.of(holes),
+      useCustomOutline: useCustomOutline,
+      customOutlinePoints: List.of(customOutlinePoints),
+    );
     outlineWidth = other.outlineWidth;
     outlineHeight = other.outlineHeight;
     cornerStyle = other.cornerStyle;
     cornerSize = other.cornerSize;
+    useCustomOutline = other.useCustomOutline;
+    customOutlinePoints = List.of(other.customOutlinePoints);
     holes
       ..clear()
       ..addAll(other.holes);
     _stored = mine;
     _fieldsAreLayer2 = !_fieldsAreLayer2;
     selectedHoleId = null;
+    selectedOutlinePointIndex = null;
   }
 
   void _setDualLayer(bool on) {
     if (on == dualLayer) return;
     if (on) {
       final mine = _snapshotFields();
-      _stored = _Plate(mine.outlineWidth, mine.outlineHeight, mine.cornerStyle, mine.cornerSize, [for (final h in holes) _cloneHole(h)]);
+      _stored = _Plate(
+        mine.outlineWidth,
+        mine.outlineHeight,
+        mine.cornerStyle,
+        mine.cornerSize,
+        [for (final h in holes) _cloneHole(h)],
+        useCustomOutline: mine.useCustomOutline,
+        customOutlinePoints: [for (final v in mine.customOutlinePoints) _cloneOutlineVertex(v)],
+      );
       dualLayer = true;
       _fieldsAreLayer2 = false;
     } else {
@@ -1255,6 +1422,9 @@ class TemplateMakerController extends ChangeNotifier {
     outlineHeight = 100;
     cornerStyle = TemplateMakerCornerStyle.fillet;
     cornerSize = 0;
+    useCustomOutline = false;
+    customOutlinePoints = [];
+    selectedOutlinePointIndex = null;
     holes.clear();
     selectedHoleId = null;
     _nextHoleSeq = 1;
@@ -1269,15 +1439,21 @@ class TemplateMakerController extends ChangeNotifier {
   ControllerTemplate toTemplate() {
     final current = _snapshotFields();
     var layer1 = _plateEntities(current);
+    var customOutline1 = _customOutlineJson(current);
     List<DxfEntity>? layer2;
+    List<Map<String, dynamic>>? customOutline2;
     final other = _stored;
     if (dualLayer && other != null) {
       final otherEntities = _plateEntities(other);
+      final otherCustomOutline = _customOutlineJson(other);
       if (_fieldsAreLayer2) {
         layer2 = layer1;
         layer1 = otherEntities;
+        customOutline2 = customOutline1;
+        customOutline1 = otherCustomOutline;
       } else {
         layer2 = otherEntities;
+        customOutline2 = otherCustomOutline;
       }
     }
     return ControllerTemplate(
@@ -1288,10 +1464,108 @@ class TemplateMakerController extends ChangeNotifier {
       category: category,
       annotations: [for (final n in notes) n.toAnnotation()],
       layer2Entities: layer2,
+      templateMakerCustomOutline: customOutline1,
+      templateMakerCustomOutlineLayer2: customOutline2,
     );
   }
 
+  /// Exact round-trip metadata for [plate]'s custom outline, for
+  /// [ControllerTemplate.templateMakerCustomOutline]/`...Layer2` -- null
+  /// when the plate isn't using a custom outline at all.
+  List<Map<String, dynamic>>? _customOutlineJson(_Plate plate) {
+    if (!plate.useCustomOutline) return null;
+    return [
+      for (final v in plate.customOutlinePoints)
+        {'x': v.position.x, 'y': v.position.y, 'style': v.style.name, 'size': v.size},
+    ];
+  }
+
+  List<DxfEntity> _holeEntities(List<TemplateMakerHole> holes) => [
+        for (final h in holes)
+          if (h.shape == TemplateMakerHoleShape.round)
+            DxfCircle(Vec2(h.x, h.y), h.diameter / 2)
+          else
+            DxfPolyline(
+              h.shape == TemplateMakerHoleShape.rect
+                  ? rectVertices(h.slotLength, h.slotWidth)
+                  : stadiumVertices(h.slotLength, h.slotWidth),
+              closed: true,
+            ).transformed(delta: Vec2(h.x, h.y), rotationDeg: h.rotationDeg),
+      ];
+
+  /// Replaces each custom-outline point's sharp corner with a fillet (arc)
+  /// or chamfer (straight cut) per its own [OutlineVertex.style]/[size] --
+  /// generalizing the same tangent-point/bulge math the rectangle's own
+  /// (always-90-degree) corner styles use, but for the point's actual
+  /// interior angle. A point whose style is sharp, or whose size is 0 or
+  /// whose neighbours are coincident, is left untouched. The tangent length
+  /// is clamped to half the shorter adjacent edge so treatments on nearby
+  /// points can never overlap past each other.
+  List<PolyVertex> _treatedOutlineVertices(List<OutlineVertex> points) {
+    final n = points.length;
+    final result = <PolyVertex>[];
+    for (var i = 0; i < n; i++) {
+      final v = points[i];
+      final curr = v.position;
+      if (v.style == OutlineCornerStyle.sharp || v.size <= 0) {
+        result.add(PolyVertex(curr));
+        continue;
+      }
+      final prev = points[(i - 1 + n) % n].position;
+      final next = points[(i + 1) % n].position;
+      final lenPrev = _dist(curr, prev);
+      final lenNext = _dist(curr, next);
+      if (lenPrev < 1e-9 || lenNext < 1e-9) {
+        result.add(PolyVertex(curr));
+        continue;
+      }
+      final u1 = Vec2((prev.x - curr.x) / lenPrev, (prev.y - curr.y) / lenPrev);
+      final u2 = Vec2((next.x - curr.x) / lenNext, (next.y - curr.y) / lenNext);
+      final dot = (u1.x * u2.x + u1.y * u2.y).clamp(-1.0, 1.0);
+      final theta = math.acos(dot); // interior angle, (0, pi)
+      if (theta < 1e-6 || theta > math.pi - 1e-6) {
+        // Collinear (straight through) or folded back on itself -- no
+        // sensible corner to cut.
+        result.add(PolyVertex(curr));
+        continue;
+      }
+      final maxReach = math.min(lenPrev, lenNext) / 2;
+      final tangentLen = math.min(
+        v.style == OutlineCornerStyle.chamfer ? v.size : v.size / math.tan(theta / 2),
+        maxReach,
+      );
+      final a = Vec2(curr.x + u1.x * tangentLen, curr.y + u1.y * tangentLen);
+      final b = Vec2(curr.x + u2.x * tangentLen, curr.y + u2.y * tangentLen);
+      if (v.style == OutlineCornerStyle.chamfer) {
+        result.add(PolyVertex(a));
+        result.add(PolyVertex(b));
+      } else {
+        final cross = u1.x * u2.y - u1.y * u2.x;
+        final turn = math.pi - theta; // the arc's own included angle
+        final bulge = math.tan(turn / 4) * (cross < 0 ? 1 : -1);
+        result.add(PolyVertex(a, bulge: bulge));
+        result.add(PolyVertex(b));
+      }
+    }
+    return result;
+  }
+
+  /// The custom outline's actual shape (fillets/chamfers flattened to
+  /// points), for the canvas preview to draw -- separate from the raw
+  /// [customOutlinePoints] positions, which the preview shows as draggable
+  /// corner markers regardless of any corner treatment.
+  List<Vec2> customOutlineDisplayPoints() {
+    if (customOutlinePoints.length < 3) return [for (final v in customOutlinePoints) v.position];
+    return DxfPolyline(_treatedOutlineVertices(customOutlinePoints), closed: true).toPoints();
+  }
+
   List<DxfEntity> _plateEntities(_Plate plate) {
+    if (plate.useCustomOutline && plate.customOutlinePoints.length >= 3) {
+      return <DxfEntity>[
+        DxfPolyline(_treatedOutlineVertices(plate.customOutlinePoints), closed: true),
+        ..._holeEntities(plate.holes),
+      ];
+    }
     final size = plate.cornerSize <= 0 ? 0.0 : math.min(plate.cornerSize, math.min(plate.outlineWidth, plate.outlineHeight) / 2);
     final List<PolyVertex> vertices;
     if (size <= 0) {
@@ -1325,16 +1599,7 @@ class TemplateMakerController extends ChangeNotifier {
     }
     return <DxfEntity>[
       DxfPolyline(vertices, closed: true),
-      for (final h in plate.holes)
-        if (h.shape == TemplateMakerHoleShape.round)
-          DxfCircle(Vec2(h.x, h.y), h.diameter / 2)
-        else
-          DxfPolyline(
-            h.shape == TemplateMakerHoleShape.rect
-                ? rectVertices(h.slotLength, h.slotWidth)
-                : stadiumVertices(h.slotLength, h.slotWidth),
-            closed: true,
-          ).transformed(delta: Vec2(h.x, h.y), rotationDeg: h.rotationDeg),
+      ..._holeEntities(plate.holes),
     ];
   }
 
@@ -1347,10 +1612,13 @@ class TemplateMakerController extends ChangeNotifier {
     if (e is DxfCircle) return true;
     if (e is DxfPolyline && e.closed && e.vertices.length == 4) {
       final bulges = e.vertices.map((v) => v.bulge).toList();
-      return (bulges[0] - 1.0).abs() < 1e-6 &&
-          bulges[1] == 0 &&
-          (bulges[2] - 1.0).abs() < 1e-6 &&
-          bulges[3] == 0;
+      bool stadiumAt(int a, int b, int c, int d) =>
+          (bulges[a] - 1.0).abs() < 1e-6 && bulges[b] == 0 && (bulges[c] - 1.0).abs() < 1e-6 && bulges[d] == 0;
+      // This tool's own stadiumVertices() always puts the two semicircle
+      // bulges at indices 0 and 2, but a hand-authored/externally exported
+      // DXF's closed loop can equally validly start at a different vertex
+      // in the same cycle, landing them at 1 and 3 instead.
+      return stadiumAt(0, 1, 2, 3) || stadiumAt(1, 2, 3, 0);
     }
     return false;
   }
@@ -1387,6 +1655,9 @@ class TemplateMakerController extends ChangeNotifier {
     holes.clear();
     selectedHoleId = null;
     _nextHoleSeq = 1;
+    useCustomOutline = false;
+    customOutlinePoints = [];
+    selectedOutlinePointIndex = null;
     _stored = null;
     dualLayer = false;
     _fieldsAreLayer2 = false;
@@ -1395,12 +1666,20 @@ class TemplateMakerController extends ChangeNotifier {
     // Layer 2 first (parked afterwards), so layer 1 ends up in the fields.
     final layer2 = template.layer2Entities;
     if (layer2 != null && layer2.isNotEmpty) {
-      _loadPlateFields(layer2);
+      _loadPlateFields(layer2, customOutlineOverride: template.templateMakerCustomOutlineLayer2);
       _stored = _snapshotFields();
-      _stored = _Plate(_stored!.outlineWidth, _stored!.outlineHeight, _stored!.cornerStyle, _stored!.cornerSize, List.of(holes));
+      _stored = _Plate(
+        _stored!.outlineWidth,
+        _stored!.outlineHeight,
+        _stored!.cornerStyle,
+        _stored!.cornerSize,
+        List.of(holes),
+        useCustomOutline: _stored!.useCustomOutline,
+        customOutlinePoints: List.of(_stored!.customOutlinePoints),
+      );
       dualLayer = true;
     }
-    _loadPlateFields(template.entities);
+    _loadPlateFields(template.entities, customOutlineOverride: template.templateMakerCustomOutline);
 
     notes.clear();
     selectedNoteId = null;
@@ -1411,7 +1690,67 @@ class TemplateMakerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _loadPlateFields(List<DxfEntity> entities) {
+  /// Reconstructs [poly]'s original sharp corners and per-corner fillet
+  /// radius by pairing each bulge vertex with the one right after it (the
+  /// two tangent points a fillet replaces a corner with, exactly as
+  /// [_treatedOutlineVertices] produces) and solving for the corner they
+  /// came from via line intersection -- the general form of the specific
+  /// uniform-rectangle patterns above, for a DXF board outline or other
+  /// import with a mix of fillet radii (or a fillet next to a sharp
+  /// corner) that don't fit those. Returns null, falling back to the
+  /// caller's plain-rectangle default, if the shape doesn't cleanly
+  /// decompose this way: two bulges with no straight vertex between them,
+  /// a degenerate (parallel or straight-through) corner, or tangent
+  /// lengths on the two sides of a corner that don't agree.
+  List<OutlineVertex>? _reconstructFilletedOutline(DxfPolyline poly) {
+    final verts = poly.vertices;
+    final n = verts.length;
+    if (!poly.closed || n < 3) return null;
+    // Starting the scan at a bulge vertex (rather than the first sharp one)
+    // guarantees every fillet pair is consumed as a whole: a "sharp" vertex
+    // here can just as well be the second tangent point of the fillet
+    // right before it (e.g. a fully-filleted polygon has no vertex that
+    // isn't part of some pair), so starting there could split that pair
+    // across the wrap-around and double-count its corner.
+    final bulgeStart = verts.indexWhere((v) => v.bulge != 0);
+    final start = bulgeStart == -1 ? 0 : bulgeStart;
+    final corners = <OutlineVertex>[];
+    var consumed = 0;
+    var i = start;
+    while (consumed < n) {
+      final v = verts[i % n];
+      if (v.bulge == 0) {
+        corners.add(OutlineVertex(v.point));
+        i++;
+        consumed++;
+        continue;
+      }
+      final a = v.point;
+      final bVertex = verts[(i + 1) % n];
+      if (bVertex.bulge != 0) return null;
+      final b = bVertex.point;
+      final prev = verts[(i - 1 + n) % n].point;
+      final next = verts[(i + 2) % n].point;
+      final corner = _lineIntersection(prev, a, b, next);
+      if (corner == null) return null;
+      final tangentA = _dist(a, corner);
+      final tangentB = _dist(b, corner);
+      if (tangentA < 1e-6 || tangentB < 1e-6 || (tangentA - tangentB).abs() > 1e-3 * math.max(tangentA, tangentB)) {
+        return null;
+      }
+      final dirA = Vec2((a.x - corner.x) / tangentA, (a.y - corner.y) / tangentA);
+      final dirB = Vec2((b.x - corner.x) / tangentB, (b.y - corner.y) / tangentB);
+      final dot = (dirA.x * dirB.x + dirA.y * dirB.y).clamp(-1.0, 1.0);
+      final theta = math.acos(dot);
+      if (theta < 1e-6 || theta > math.pi - 1e-6) return null;
+      corners.add(OutlineVertex(corner, style: OutlineCornerStyle.fillet, size: tangentA * math.tan(theta / 2)));
+      i += 2;
+      consumed += 2;
+    }
+    return corners.length >= 3 ? corners : null;
+  }
+
+  void _loadPlateFields(List<DxfEntity> entities, {List<Map<String, dynamic>>? customOutlineOverride}) {
     BoundingBox? largest;
     var largestArea = 0.0;
     for (final e in entities) {
@@ -1436,6 +1775,8 @@ class TemplateMakerController extends ChangeNotifier {
 
     cornerStyle = TemplateMakerCornerStyle.fillet;
     cornerSize = 0;
+    useCustomOutline = false;
+    customOutlinePoints = [];
     if (outlineBox != null) {
       outlineWidth = outlineBox.width;
       outlineHeight = outlineBox.height;
@@ -1444,7 +1785,10 @@ class TemplateMakerController extends ChangeNotifier {
       // read the style and size back off that shape when the outline is
       // exactly one such polyline. A multi-piece outline has no single shape
       // to inspect and just comes back in with sharp corners, which is
-      // correct there.
+      // correct there. Any other single closed straight-edge polyline (more
+      // than the plain 4-vertex rectangle) is a custom outline this tool's
+      // own click-to-draw editor built (or a hand-authored/DXF one) -- load
+      // its points back in rather than losing the shape to a bounding box.
       if (outlineSource.length == 1 && outlineSource.first is DxfPolyline) {
         final verts = (outlineSource.first as DxfPolyline).vertices;
         if (verts.length == 8 && verts.any((v) => v.bulge != 0)) {
@@ -1456,8 +1800,37 @@ class TemplateMakerController extends ChangeNotifier {
         } else if (verts.length == 12 && verts.every((v) => v.bulge == 0)) {
           cornerStyle = TemplateMakerCornerStyle.cornerCut;
           cornerSize = verts.first.point.x.abs();
+        } else if (verts.length > 4 && verts.every((v) => v.bulge == 0)) {
+          useCustomOutline = true;
+          customOutlinePoints = verts.map((v) => OutlineVertex(v.point)).toList();
+        } else {
+          // Doesn't match any of this tool's own uniform corner-style
+          // patterns (e.g. a DXF board outline with a mix of fillet radii,
+          // or a fillet next to a sharp corner) -- try reconstructing it as
+          // a general custom outline instead of losing the shape to a
+          // plain bounding-box rectangle.
+          final reconstructed = _reconstructFilletedOutline(outlineSource.first as DxfPolyline);
+          if (reconstructed != null) {
+            useCustomOutline = true;
+            customOutlinePoints = reconstructed;
+          }
         }
       }
+    }
+    // Exact round-trip metadata, when present, always wins over the above
+    // best-effort geometric detection -- which can't tell a plain rectangle
+    // from an unmodified 4-point custom outline, and loses fillets/chamfers
+    // (flattened into arcs and extra straight vertices) entirely.
+    if (customOutlineOverride != null) {
+      useCustomOutline = true;
+      customOutlinePoints = [
+        for (final m in customOutlineOverride)
+          OutlineVertex(
+            Vec2((m['x'] as num).toDouble(), (m['y'] as num).toDouble()),
+            style: OutlineCornerStyle.values.byName(m['style'] as String? ?? 'sharp'),
+            size: (m['size'] as num?)?.toDouble() ?? 0,
+          ),
+      ];
     }
 
     holes.clear();

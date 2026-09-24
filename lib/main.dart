@@ -9,6 +9,7 @@ import 'services/theme_settings.dart';
 import 'widgets/app_colors.dart';
 import 'widgets/left_palette.dart';
 import 'widgets/right_property_panel.dart';
+import 'widgets/snap_grid_bar.dart';
 import 'widgets/top_toolbar.dart';
 import 'version.dart';
 
@@ -133,6 +134,7 @@ class _BoxDesignHomePageState extends State<BoxDesignHomePage> {
                           ],
                         ),
                       ),
+                      SnapGridBar(controller: _controller),
                     ],
                   ),
                 );

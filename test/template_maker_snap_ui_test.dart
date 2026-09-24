@@ -103,7 +103,22 @@ void main() {
 
     final canvas = find.byWidgetPredicate((w) => w is CustomPaint && w.painter is TemplateOutlinePainter);
     TemplateOutlinePainter painter() => tester.widget<CustomPaint>(canvas).painter! as TemplateOutlinePainter;
+
+    // Tapping the tool button only arms it -- drawing the rectangle itself
+    // (and selecting it) takes an actual drag on the canvas.
+    final draw = await tester.startGesture(tester.getCenter(canvas), kind: PointerDeviceKind.mouse);
+    await draw.moveBy(const Offset(80, -60));
+    await tester.pump();
+    await draw.up();
+    await tester.pump();
+
     expect(painter().noteHandles.length, 4);
+
+    // The draw tool stays armed after drawing one shape (so several can be
+    // drawn in a row) -- disarm it, or the next click on the "handle" below
+    // would draw a second rectangle there instead of resizing this one.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
 
     Offset px(Vec2 mm) {
       final size = tester.getSize(canvas);
@@ -164,8 +179,22 @@ void main() {
       return tester.getCenter(canvas) + Offset((mm.x - p.outlineWidth / 2) * scale, -(mm.y - p.outlineHeight / 2) * scale);
     }
 
+    // Tapping the tool button only arms it -- drawing the line itself (and
+    // selecting it) takes an actual drag on the canvas.
+    final draw = await tester.startGesture(tester.getCenter(canvas), kind: PointerDeviceKind.mouse);
+    await draw.moveBy(const Offset(80, -60));
+    await tester.pump();
+    await draw.up();
+    await tester.pump();
+
     expect(painter().noteHandles.length, 2);
     var (start, end) = (painter().noteHandles[0], painter().noteHandles[1]);
+
+    // The draw tool stays armed after drawing one shape (so several can be
+    // drawn in a row) -- disarm it, or the next click on the "handle" below
+    // would draw a second line there instead of dragging this one's end.
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
 
     // One big, fast move straight off the end point.
     var g = await tester.startGesture(px(end), kind: PointerDeviceKind.mouse);

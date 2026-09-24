@@ -30,6 +30,25 @@ class DesignController extends ChangeNotifier {
   Vec2? measureStart;
   Vec2? measureEnd;
 
+  /// When set, dragging a placed template or hole snaps its position to
+  /// this grid size (mm); null means free placement (no snapping).
+  double? snapToGridMm = 1.0;
+  static const snapToGridOptionsMm = [1.0, 2.0, 5.0, 10.0, 20.0];
+
+  void setSnapToGridMm(double? value) {
+    snapToGridMm = value;
+    notifyListeners();
+  }
+
+  /// Rounds [position] to the nearest [snapToGridMm] multiple, or returns
+  /// it unchanged when snapping is off.
+  Vec2 snapToGrid(Vec2 position) {
+    final grid = snapToGridMm;
+    if (grid == null) return position;
+    double roundTo(double v) => (v / grid).round() * grid;
+    return Vec2(roundTo(position.x), roundTo(position.y));
+  }
+
   PlacedTemplate? _clipboardTemplate;
   Hole? _clipboardHole;
 
