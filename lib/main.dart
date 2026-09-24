@@ -68,6 +68,10 @@ class _BoxDesignHomePageState extends State<BoxDesignHomePage> {
   final HolePresetLibrary _holePresetLibrary = HolePresetLibrary();
   late final DesignController _controller = DesignController(_library);
   final FocusNode _canvasFocusNode = FocusNode();
+
+  double _rightPanelWidth = 200;
+  static const double _minRightPanelWidth = 200;
+  static const double _maxRightPanelWidth = 560;
   late final Future<void> _initialLoad = _library.loadBuiltIns().then((_) async {
     await _library.loadUserTemplates();
     final defaultBox = _library.defaultBoxTemplate;
@@ -126,9 +130,19 @@ class _BoxDesignHomePageState extends State<BoxDesignHomePage> {
                                 ),
                               ),
                             ),
-                            const VerticalDivider(width: 1),
+                            MouseRegion(
+                              cursor: SystemMouseCursors.resizeLeftRight,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onHorizontalDragUpdate: (details) => setState(() {
+                                  _rightPanelWidth = (_rightPanelWidth - details.delta.dx)
+                                      .clamp(_minRightPanelWidth, _maxRightPanelWidth);
+                                }),
+                                child: const VerticalDivider(width: 5, thickness: 1),
+                              ),
+                            ),
                             SizedBox(
-                              width: 280,
+                              width: _rightPanelWidth,
                               child: RightPropertyPanel(controller: _controller),
                             ),
                           ],
