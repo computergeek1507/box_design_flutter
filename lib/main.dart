@@ -69,6 +69,10 @@ class _BoxDesignHomePageState extends State<BoxDesignHomePage> {
   late final DesignController _controller = DesignController(_library);
   final FocusNode _canvasFocusNode = FocusNode();
 
+  double _leftPanelWidth = 240;
+  static const double _minLeftPanelWidth = 200;
+  static const double _maxLeftPanelWidth = 560;
+
   double _rightPanelWidth = 200;
   static const double _minRightPanelWidth = 200;
   static const double _maxRightPanelWidth = 560;
@@ -113,14 +117,24 @@ class _BoxDesignHomePageState extends State<BoxDesignHomePage> {
                         child: Row(
                           children: [
                             SizedBox(
-                              width: 240,
+                              width: _leftPanelWidth,
                               child: LeftPalette(
                                 library: _library,
                                 holePresetLibrary: _holePresetLibrary,
                                 controller: _controller,
                               ),
                             ),
-                            const VerticalDivider(width: 1),
+                            MouseRegion(
+                              cursor: SystemMouseCursors.resizeLeftRight,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.translucent,
+                                onHorizontalDragUpdate: (details) => setState(() {
+                                  _leftPanelWidth = (_leftPanelWidth + details.delta.dx)
+                                      .clamp(_minLeftPanelWidth, _maxLeftPanelWidth);
+                                }),
+                                child: const VerticalDivider(width: 5, thickness: 1),
+                              ),
+                            ),
                             Expanded(
                               child: ColoredBox(
                                 color: canvasBackground(context),
