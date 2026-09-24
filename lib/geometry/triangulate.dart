@@ -67,8 +67,13 @@ class BridgeTarget {
 /// non-crossing diagonals that were nonetheless the exact same physical
 /// segment, producing a duplicated face once vertices are welded by
 /// position downstream (see [extrudePlate]).
-BridgeTarget _findBridgeTarget(Vec2 m, List<Vec2> working) {
+BridgeTarget _findBridgeTarget(Vec2 m, List<Vec2> working, {double rayYOffset = 0}) {
   final n = working.length;
+  // The ray is cast at this Y, not [m.y] itself, when [rayYOffset] is
+  // nonzero -- see the caller for why: it's how two different holes whose
+  // rightmost points land at the *exact* same Y (a common coincidence for
+  // axis-aligned holes/slots at matching heights) get distinguishable rays.
+  final rayY = m.y + rayYOffset;
 
   // Every earlier bridge is a zero-width slit traversed once out and once
   // back along the exact same line, so a ray that crosses one crosses both
@@ -81,8 +86,8 @@ BridgeTarget _findBridgeTarget(Vec2 m, List<Vec2> working) {
     final a = working[i];
     final b = working[(i + 1) % n];
     if (a.y == b.y) continue;
-    if ((a.y > m.y) == (b.y > m.y)) continue;
-    final t = (m.y - a.y) / (b.y - a.y);
+    if ((a.y > rayY) == (b.y > rayY)) continue;
+    final t = (rayY - a.y) / (b.y - a.y);
     final x = a.x + t * (b.x - a.x);
     if (x <= m.x) continue;
     crossings.add((x, i, (i + 1) % n));
@@ -125,7 +130,7 @@ BridgeTarget _findBridgeTarget(Vec2 m, List<Vec2> working) {
     return BridgeTarget(best, working[best], false);
   }
 
-  final iPoint = Vec2(bestX, m.y);
+  final iPoint = Vec2(bestX, rayY);
   // A near-miss (not just an exact match) still needs reusing: two holes'
   // rays can cross the same short discretized-circle edge at points that
   // are only a hair apart, and inserting two separate new vertices that
@@ -207,7 +212,19 @@ MergeResult mergeHolesIntoOuter(List<Vec2> outerCcw, List<List<Vec2>> holesCcw) 
     }
     final m = hole[mIdx];
 
-    final target = _findBridgeTarget(m, working);
+    // A tiny, hole-specific offset to the ray's Y: without it, two holes
+    // whose rightmost points coincidentally sit at the exact same Y (common
+    // for axis-aligned holes/slots at matching heights) cast identical
+    // rays, and an earlier hole's own already-bridged slit becomes
+    // invisible to a later hole's crossing test (its slit walls end exactly
+    // *at* that Y, which the strict less-than/greater-than crossing check
+    // excludes) -- sending the later hole's bridge straight through/past it
+    // to the same far target, producing two overlapping bridge segments and
+    // a non-manifold mesh. Offsetting by (holeIndex + 1) * 1e-5 is enough to
+    // separate any two holes' rays (comfortably above the 1e-6
+    // vertex-reuse-snap epsilon below, so it doesn't defeat that) while
+    // being negligible at real plate scale.
+    final target = _findBridgeTarget(m, working, rayYOffset: (holeIndex + 1) * 1e-5);
     int chosen;
     if (target.isNew) {
       final owner = workingOwner[target.afterIndex];

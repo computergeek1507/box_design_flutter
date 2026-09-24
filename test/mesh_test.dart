@@ -190,6 +190,33 @@ void main() {
       _expectManifold(mesh);
     });
 
+    test('two holes whose rightmost points land at the exact same Y stay manifold', () {
+      // Regression test for a real reported corrupt STL export: two
+      // axis-aligned rectangular holes at matching heights (extremely common
+      // -- e.g. mounting slots mirrored left/right on an enclosure) cast
+      // identical horizontal bridge rays. The nearer hole's own already-
+      // bridged slit has walls that end *exactly* at that Y, which the
+      // bridge-finding ray's strict crossing test excluded -- making it
+      // invisible to the farther hole's ray and sending its bridge straight
+      // through/past it to the same target, producing two overlapping
+      // bridge segments and a non-manifold mesh.
+      List<Vec2> squareAt(double cx, double cy) => [
+            Vec2(cx - 2, cy - 2),
+            Vec2(cx + 2, cy - 2),
+            Vec2(cx + 2, cy + 2),
+            Vec2(cx - 2, cy + 2),
+          ];
+      final mesh = extrudePlate(
+        outer: _rect(100, 40),
+        holes: [
+          squareAt(80, 20), // nearer the right edge -- bridged first
+          squareAt(20, 20), // same Y, farther away -- bridged second
+        ],
+        thickness: 5,
+      );
+      _expectManifold(mesh);
+    });
+
     test('vertices span exactly [0, thickness] in z', () {
       final mesh = extrudePlate(
         outer: _rect(10, 10),
