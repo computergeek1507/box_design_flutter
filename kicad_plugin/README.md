@@ -31,7 +31,7 @@ Tested against KiCad 9.
    - **Category** -- `controller`, `controllerAddon`, `receiver`, `powerSupply`,
      `powerDistribution`, or `box`.
    - **Min hole diameter (mm)** -- round/slotted holes smaller than this
-     are skipped (default 1.4mm), so component leads and vias don't get
+     are skipped (default 2.9mm), so component leads and vias don't get
      pulled in as if they were mounting holes.
    - **Include NPTH / PTH / slotted holes** -- NPTH (non-plated mechanical)
      holes are on by default, since that's what `MountingHole` footprints
@@ -41,9 +41,9 @@ Tested against KiCad 9.
      silkscreen is ticked by default; courtyards and the user layers are there
      too. See [Notes from layers](#notes-from-layers).
    - **Parts (ref letters)** -- reference-designator letters whose footprint
-     graphics are exported, `J, U` by default (connectors and ICs: `J1`, `U3`,
-     but not `JP1`). Leave it empty for every part plus the board's own loose
-     graphics.
+     graphics are exported, `J, U, TB` by default (connectors, ICs and
+     terminal blocks: `J1`, `U3`, `TB1`, but not `JP1`). Leave it empty for
+     every part plus the board's own loose graphics.
    - **Normalize origin** -- shifts geometry so the bounding box's min
      corner sits at (0, 0), matching every bundled template's convention.
      Leave this on unless you have a specific reason not to.
@@ -89,7 +89,7 @@ Template Maker's drawing layer instead. Back layers are exported as seen from
 the front, not mirrored. The CLI equivalents are
 `--note-layers silk_front,courtyard_front` (`none` for no notes; keys are
 `silk_front`, `silk_back`, `courtyard_front`, `courtyard_back`,
-`dwgs_user`, `cmts_user`) and `--part-refs J,U` (`--part-refs ""` for all parts).
+`dwgs_user`, `cmts_user`) and `--part-refs J,U,TB` (`--part-refs ""` for all parts).
 
 ## Standalone CLI (no KiCad GUI needed)
 

@@ -344,9 +344,9 @@ def round_entities(entities, ndigits=4):
 # ---------------------------------------------------------------------------
 
 class ExtractOptions:
-    def __init__(self, flip_y=True, hole_min_mm=1.4, hole_max_mm=None,
+    def __init__(self, flip_y=True, hole_min_mm=2.9, hole_max_mm=None,
                  include_npth=True, include_pth=False, include_slots=True,
-                 scale=1.0, note_layers=DEFAULT_NOTE_LAYERS, part_refs=("J", "U")):
+                 scale=1.0, note_layers=DEFAULT_NOTE_LAYERS, part_refs=("J", "U", "TB")):
         self.note_layers = tuple(note_layers)  # NOTE_LAYERS keys exported as drawing-layer notes
         # Reference-designator letters whose footprints contribute notes; empty = all
         # footprints plus the board's own graphics.
@@ -629,7 +629,7 @@ def _run_gui(board) -> None:
             self.category_ctrl.SetSelection(0)
             add_row("Category:", self.category_ctrl)
 
-            self.min_hole_ctrl = wx.TextCtrl(panel, value="1.4")
+            self.min_hole_ctrl = wx.TextCtrl(panel, value="2.9")
             add_row("Min hole diameter (mm):", self.min_hole_ctrl)
 
             self.include_npth_ctrl = wx.CheckBox(panel, label="Include NPTH (mounting) holes")
@@ -653,7 +653,7 @@ def _run_gui(board) -> None:
                 self.note_layers_ctrl.Check(idx, key in DEFAULT_NOTE_LAYERS)
             add_row("Layers as notes:", self.note_layers_ctrl)
 
-            self.part_refs_ctrl = wx.TextCtrl(panel, value="J, U")
+            self.part_refs_ctrl = wx.TextCtrl(panel, value="J, U, TB")
             self.part_refs_ctrl.SetToolTip(
                 "Reference-designator letters whose footprint graphics are exported, e.g. J, U. "
                 "Leave empty for every part plus the board's own graphics.")
@@ -823,8 +823,8 @@ def _cli_main(argv: list[str]) -> int:
     parser.add_argument("--category", required=True, choices=VALID_CATEGORIES)
     parser.add_argument("-o", "--output", type=Path, default=None,
                          help="Output JSON path (default: assets/templates/<id>.json if found, else ./<id>.json)")
-    parser.add_argument("--min-hole-mm", type=float, default=1.4,
-                         help="Skip round/slotted holes smaller than this diameter (default: 1.4)")
+    parser.add_argument("--min-hole-mm", type=float, default=2.9,
+                         help="Skip round/slotted holes smaller than this diameter (default: 2.9)")
     parser.add_argument("--max-hole-mm", type=float, default=None,
                          help="Skip holes larger than this diameter (default: no limit)")
     parser.add_argument("--include-pth", action="store_true",
@@ -835,9 +835,9 @@ def _cli_main(argv: list[str]) -> int:
                          help="Comma separated layers to export as drawing-layer notes, from "
                               f"{', '.join(NOTE_LAYERS)} (default: {','.join(DEFAULT_NOTE_LAYERS)}; "
                               "'none' for no notes)")
-    parser.add_argument("--part-refs", default="J,U",
+    parser.add_argument("--part-refs", default="J,U,TB",
                          help="Reference-designator letters whose footprint graphics are exported, comma "
-                              "separated (default: J,U). Pass '' for every part plus the board's own "
+                              "separated (default: J,U,TB). Pass '' for every part plus the board's own "
                               "graphics")
     parser.add_argument("--no-normalize", action="store_true",
                          help="Don't translate geometry so its bounding box starts at (0, 0)")
