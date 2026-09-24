@@ -56,6 +56,27 @@ class DesignController extends ChangeNotifier {
 
   String _newId(String prefix) => '$prefix-${_nextId++}';
 
+  /// Bumps [_nextId] past every numeric suffix already used by [loaded]'s
+  /// placed templates and holes, so newly created items can never reuse an
+  /// id a loaded project brought with it. Without this, `_nextId` kept
+  /// counting from wherever it happened to be (1, for a freshly launched
+  /// app) regardless of what the loaded project already contained, so
+  /// adding a new hole/template after opening a project could mint an id
+  /// (e.g. "hole-4") that collides with one already in the file — and two
+  /// items sharing an id both render as selected whenever either is
+  /// clicked, since selection is just an `id == selectedId` match.
+  void _resyncNextId(BoxProject loaded) {
+    var maxSeen = 0;
+    for (final id in [
+      ...loaded.placedTemplates.map((p) => p.id),
+      ...loaded.holes.map((h) => h.id),
+    ]) {
+      final suffix = int.tryParse(id.split('-').last);
+      if (suffix != null && suffix > maxSeen) maxSeen = suffix;
+    }
+    if (maxSeen >= _nextId) _nextId = maxSeen + 1;
+  }
+
   /// Copies the selected placed template or hole to an internal clipboard,
   /// ready for [pasteClipboard].
   void copySelected() {
@@ -276,6 +297,7 @@ class DesignController extends ChangeNotifier {
   void loadProject(BoxProject loaded) {
     project = loaded;
     selectedId = null;
+    _resyncNextId(loaded);
     _clampIntoBox();
     notifyListeners();
   }

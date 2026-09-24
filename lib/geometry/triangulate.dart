@@ -30,6 +30,23 @@ bool _pointStrictlyInsideTriangle(Vec2 p, Vec2 a, Vec2 b, Vec2 c) {
   return (d1 > 0 && d2 > 0 && d3 > 0) || (d1 < 0 && d2 < 0 && d3 < 0);
 }
 
+/// True if [p] lies exactly on the open segment `(a, b)` — collinear with,
+/// and strictly between, its endpoints. A diagonal that merely grazes a
+/// vertex this way (common with the reflex corners a mounting flange/notch
+/// produces, where a straight diagonal between two non-adjacent boundary
+/// vertices can pass directly through a third one sitting between them) is
+/// caught by neither [_pointStrictlyInsideTriangle] (the vertex is on an
+/// edge, not strictly inside) nor [_properlyIntersect] (touching a shared
+/// point isn't a proper crossing) — so without this check the clipper
+/// happily clips it, orphaning that third vertex's boundary edges.
+bool _pointOnOpenSegment(Vec2 p, Vec2 a, Vec2 b) {
+  if (_cross(a, b, p).abs() > 1e-9) return false;
+  final dot = (p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y);
+  if (dot <= 0) return false;
+  final lenSq = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y);
+  return dot < lenSq;
+}
+
 bool _properlyIntersect(Vec2 p1, Vec2 p2, Vec2 p3, Vec2 p4) {
   double d(Vec2 a, Vec2 b, Vec2 c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
   final d1 = d(p3, p4, p1);
@@ -329,7 +346,7 @@ List<List<int>> earClipTriangulate(List<Vec2> pts) {
       var containsOther = false;
       for (final j in remaining) {
         if (j == iPrev || j == iCurr || j == iNext) continue;
-        if (_pointStrictlyInsideTriangle(pts[j], a, b, c)) {
+        if (_pointStrictlyInsideTriangle(pts[j], a, b, c) || _pointOnOpenSegment(pts[j], a, c)) {
           containsOther = true;
           break;
         }
@@ -388,7 +405,7 @@ List<List<int>> earClipTriangulate(List<Vec2> pts) {
           var containsOther = false;
           for (final j in remaining) {
             if (j == iPrev || j == iCurr || j == iNext) continue;
-            if (_pointStrictlyInsideTriangle(pts[j], a, b, c)) {
+            if (_pointStrictlyInsideTriangle(pts[j], a, b, c) || _pointOnOpenSegment(pts[j], a, c)) {
               containsOther = true;
               break;
             }

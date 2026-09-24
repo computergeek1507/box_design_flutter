@@ -112,6 +112,33 @@ void main() {
     });
   });
 
+  group('earClipTriangulate', () {
+    test('an ear whose diagonal passes exactly through another vertex is rejected', () {
+      // Regression test for a real reported corrupt STL export: a mounting
+      // flange/notch shape (material sticking out to the left only for a
+      // middle span of Y, flush with the body above and below it) has two
+      // reflex corners at the same X with a third reflex corner of the same
+      // notch sitting exactly between them on the connecting vertical line.
+      // A diagonal straight between the outer two passes exactly through
+      // the middle one -- collinear-and-between, not strictly inside the
+      // ear triangle and not a *proper* crossing of either adjacent edge --
+      // so neither existing check caught it, and clipping it orphaned the
+      // middle vertex's boundary edges.
+      final outer = [
+        const Vec2(8, 0),
+        const Vec2(40, 0),
+        const Vec2(40, 154),
+        const Vec2(8, 154),
+        const Vec2(8, 146),
+        const Vec2(0, 146),
+        const Vec2(0, 8),
+        const Vec2(8, 8),
+      ];
+      final mesh = extrudePlate(outer: outer, holes: const [], thickness: 1);
+      _expectManifold(mesh);
+    });
+  });
+
   group('extrudePlate', () {
     test('skips holes that are not entirely inside the outline', () {
       final outer = [const Vec2(0, 0), const Vec2(20, 0), const Vec2(20, 10), const Vec2(10, 20), const Vec2(0, 20)];
