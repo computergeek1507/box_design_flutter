@@ -921,6 +921,64 @@ class TemplateMakerController extends ChangeNotifier {
     return mismatch;
   }
 
+  /// Traces the board's outer edge in the reference image and turns it into
+  /// the custom outline (switching custom-outline mode on), mapped through
+  /// the image's *current* position and size -- so auto-fit it first.
+  /// Near-horizontal/vertical edges are squared up. Returns the number of
+  /// points, or null if no board could be found.
+  Future<int?> traceOutlineFromImage() async {
+    final img = refImage;
+    if (img == null) return null;
+    _refPixels ??= (await img.toByteData(format: ui.ImageByteFormat.rawRgba))?.buffer.asUint8List();
+    final pixels = _refPixels;
+    if (pixels == null) return null;
+    final poly = traceBoardOutline(pixels, img.width, img.height);
+    if (poly == null) return null;
+
+    final mmPerPxX = imageWidth / img.width;
+    final mmPerPxY = imageHeight / img.height;
+    final pts = [
+      for (final p in poly) Vec2(imageX + p.x * mmPerPxX, imageY + imageHeight - p.y * mmPerPxY),
+    ];
+    // The trace runs clockwise as seen on screen -- reverse it to
+    // counter-clockwise (Y up) like the default rectangle.
+    final ring = pts.reversed.toList();
+
+    // Square up edges within ~2 degrees of horizontal/vertical, sharing the
+    // averaged coordinate between both ends.
+    const tanTol = 0.035;
+    for (var i = 0; i < ring.length; i++) {
+      final j = (i + 1) % ring.length;
+      final a = ring[i], b = ring[j];
+      final dx = (b.x - a.x).abs(), dy = (b.y - a.y).abs();
+      if (dy <= dx * tanTol) {
+        final y = (a.y + b.y) / 2;
+        ring[i] = Vec2(a.x, y);
+        ring[j] = Vec2(b.x, y);
+      } else if (dx <= dy * tanTol) {
+        final x = (a.x + b.x) / 2;
+        ring[i] = Vec2(x, a.y);
+        ring[j] = Vec2(x, b.y);
+      }
+    }
+
+    double r1(double v) => (v * 10).round() / 10;
+    final vertices = <OutlineVertex>[];
+    for (final p in ring) {
+      final v = Vec2(r1(p.x), r1(p.y));
+      if (vertices.isNotEmpty && _dist(vertices.last.position, v) < 0.05) continue;
+      vertices.add(OutlineVertex(v));
+    }
+    if (vertices.length > 1 && _dist(vertices.first.position, vertices.last.position) < 0.05) vertices.removeLast();
+    if (vertices.length < 3) return null;
+
+    customOutlinePoints = vertices;
+    useCustomOutline = true;
+    selectedOutlinePointIndex = null;
+    notifyListeners();
+    return vertices.length;
+  }
+
   /// Finds round holes, slots and rectangles enclosed by the outline in the
   /// reference image (using the image's *current* position and size, so fit
   /// it to the outline first) and adds them as holes, skipping any that
@@ -1498,11 +1556,40 @@ class TemplateMakerController extends ChangeNotifier {
   /// generalizing the same tangent-point/bulge math the rectangle's own
   /// (always-90-degree) corner styles use, but for the point's actual
   /// interior angle. A point whose style is sharp, or whose size is 0 or
-  /// whose neighbours are coincident, is left untouched. The tangent length
-  /// is clamped to half the shorter adjacent edge so treatments on nearby
-  /// points can never overlap past each other.
+  /// whose neighbours are coincident, is left untouched. Each edge is
+  /// shared by the treatments at its two ends: a corner next to a sharp one
+  /// may use the whole edge, and two treated corners that would overlap
+  /// split the edge in proportion to what each asks for.
   List<PolyVertex> _treatedOutlineVertices(List<OutlineVertex> points) {
     final n = points.length;
+
+    // How far along each of its edges every corner's treatment wants to
+    // reach (0 for sharp/degenerate corners).
+    final wanted = List<double>.filled(n, 0);
+    for (var i = 0; i < n; i++) {
+      final v = points[i];
+      if (v.style == OutlineCornerStyle.sharp || v.size <= 0) continue;
+      final curr = v.position;
+      final prev = points[(i - 1 + n) % n].position;
+      final next = points[(i + 1) % n].position;
+      final lenPrev = _dist(curr, prev);
+      final lenNext = _dist(curr, next);
+      if (lenPrev < 1e-9 || lenNext < 1e-9) continue;
+      final dot = (((prev.x - curr.x) * (next.x - curr.x) + (prev.y - curr.y) * (next.y - curr.y)) / (lenPrev * lenNext)).clamp(-1.0, 1.0);
+      final theta = math.acos(dot);
+      if (theta < 1e-6 || theta > math.pi - 1e-6) continue;
+      wanted[i] = v.style == OutlineCornerStyle.chamfer ? v.size : v.size / math.tan(theta / 2);
+    }
+    // The share of edge i -> i+1 that corner [atStart] (i) or the other end
+    // (i+1) may use.
+    double edgeShare(int i, {required bool atStart}) {
+      final j = (i + 1) % n;
+      final len = _dist(points[i].position, points[j].position);
+      final mine = atStart ? wanted[i] : wanted[j];
+      final total = wanted[i] + wanted[j];
+      return total <= len ? mine : len * mine / total;
+    }
+
     final result = <PolyVertex>[];
     for (var i = 0; i < n; i++) {
       final v = points[i];
@@ -1529,10 +1616,11 @@ class TemplateMakerController extends ChangeNotifier {
         result.add(PolyVertex(curr));
         continue;
       }
-      final maxReach = math.min(lenPrev, lenNext) / 2;
+      // Both tangent points sit the same distance from the corner (so a
+      // fillet stays tangent to both edges): the tighter edge's share wins.
       final tangentLen = math.min(
-        v.style == OutlineCornerStyle.chamfer ? v.size : v.size / math.tan(theta / 2),
-        maxReach,
+        wanted[i],
+        math.min(edgeShare((i - 1 + n) % n, atStart: false), edgeShare(i, atStart: true)),
       );
       final a = Vec2(curr.x + u1.x * tangentLen, curr.y + u1.y * tangentLen);
       final b = Vec2(curr.x + u2.x * tangentLen, curr.y + u2.y * tangentLen);
@@ -1545,6 +1633,17 @@ class TemplateMakerController extends ChangeNotifier {
         final bulge = math.tan(turn / 4) * (cross < 0 ? 1 : -1);
         result.add(PolyVertex(a, bulge: bulge));
         result.add(PolyVertex(b));
+      }
+    }
+    // A treatment that uses a whole edge ends exactly on the next (sharp)
+    // corner: merge such coincident vertices, keeping the one that starts
+    // an arc.
+    for (var i = 0; result.length > 3 && i < result.length;) {
+      final j = (i + 1) % result.length;
+      if (_dist(result[i].point, result[j].point) < 1e-6) {
+        result.removeAt(result[i].bulge == 0 ? i : j);
+      } else {
+        i++;
       }
     }
     return result;

@@ -89,6 +89,10 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
   Vec2? _outlinePointResizeStart;
   double _outlinePointResizeBaseSize = 0;
 
+  /// Where an outline-point drag started, until it has moved past
+  /// [_outlinePointDragDeadZonePx].
+  Offset? _outlinePointDragStartPx;
+  static const _outlinePointDragDeadZonePx = 4.0;
   /// For detecting a double-click on the outline (not on an existing point)
   /// to insert a new point there, mirroring the note double-click detector
   /// below but for the plate layer.
@@ -570,9 +574,12 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       if (!_controller.selectedNoteIds.contains(hit.id)) setState(() => _controller.selectNote(hit.id));
       return;
     }
-    if (_controller.useCustomOutline && !_addingOutlinePoint) {
-      final idx = _outlinePointNear(mm, scale);
+    if (_controller.useCustomOutline) {
+      // In add mode a press that turns into a drag never reaches the tap
+      // handler: add the point here (or grab an existing one), then drag it.
+      final idx = _addingOutlinePoint ? _addOrSelectOutlinePoint(mm, size) : _outlinePointNear(mm, scale);
       if (idx != null) {
+        _outlinePointDragStartPx = details.localPosition;
         _draggingOutlinePointIndex = idx;
         _outlinePointResizeStart = mm;
         _outlinePointResizeBaseSize = _controller.customOutlinePoints[idx].size;
@@ -746,44 +753,61 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     if (_editingNoteId == null) _keyFocus.requestFocus();
   }
 
+  /// "Add outline point" mode's click: selects the point under [mm] if there
+  /// is one, otherwise adds a point there. Returns the selected/added index.
+  int _addOrSelectOutlinePoint(Vec2 mm, Size size) {
+    final existingIndex = _outlinePointNear(mm, _previewScale(size));
+    if (existingIndex != null) {
+      // Clicking an existing point while still in add mode selects it (and
+      // lets a drag move it) instead of stacking a new point on top of it.
+      setState(() {
+        _controller.selectOutlinePoint(existingIndex);
+        _refreshOutlinePointFields();
+      });
+      return existingIndex;
+    }
+    // Once the outline is closed (3+ points), the new point splits the edge
+    // it adds the least length to -- the line you clicked on or next to --
+    // instead of wiring it to whichever point happens to be selected, which
+    // could be on the far side. While still drawing the first points, it
+    // chains on after the selected one (or goes at the end).
+    final start = _snapDrag(mm, size);
+    final points = _controller.customOutlinePoints;
+    final after = points.length >= 3 ? _cheapestOutlineEdge(start) : _controller.selectedOutlinePointIndex;
+    late int index;
+    setState(() {
+      index = after != null ? _controller.insertOutlinePointAfter(after, start) : _controller.addOutlinePointAt(start);
+      _refreshOutlinePointFields();
+    });
+    return index;
+  }
+
+  /// Index of the closed outline's edge (from that point to the next) that
+  /// inserting [p] lengthens the least.
+  int _cheapestOutlineEdge(Vec2 p) {
+    final points = _controller.customOutlinePoints;
+    double d(Vec2 a, Vec2 b) => math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+    var best = 0;
+    var bestCost = double.infinity;
+    for (var i = 0; i < points.length; i++) {
+      final a = points[i].position, b = points[(i + 1) % points.length].position;
+      final cost = d(a, p) + d(p, b) - d(a, b);
+      if (cost < bestCost) {
+        bestCost = cost;
+        best = i;
+      }
+    }
+    return best;
+  }
+
   void _onPreviewTapDown(TapDownDetails details, Size size) {
     _focusCanvasKeys();
     if (_controller.measureMode) return;
     if (_controller.useCustomOutline && _addingOutlinePoint) {
       // A plain click (no drag) never reaches onPanStart, so adding a point
       // on tap is what makes "click to add points" actually work --
-      // onPanStart still handles dragging an already-placed point.
-      final mm = _previewPxToMm(details.localPosition, size);
-      final scale = _previewScale(size);
-      final existingIndex = _outlinePointNear(mm, scale);
-      if (existingIndex != null) {
-        // Clicking an existing point while still in add mode re-anchors
-        // where the *next* click inserts, instead of adding a new point
-        // wherever you clicked chained onto whatever was selected before --
-        // e.g. jump to a point on the right/bottom side before continuing,
-        // without leaving add mode to reselect it first.
-        setState(() {
-          _controller.selectOutlinePoint(existingIndex);
-          _refreshOutlinePointFields();
-        });
-        return;
-      }
-      // Inserting after the selected point (rather than always appending at
-      // the very end) keeps the path in the right order and, since the new
-      // point becomes selected too, each further click chains onto the last
-      // one -- select a point on the side you want to extend and it builds
-      // from there instead of jumping back to wherever the last point
-      // happened to be.
-      final start = _snapDrag(mm, size);
-      setState(() {
-        final selected = _controller.selectedOutlinePointIndex;
-        if (selected != null) {
-          _controller.insertOutlinePointAfter(selected, start);
-        } else {
-          _controller.addOutlinePointAt(start);
-        }
-        _refreshOutlinePointFields();
-      });
+      // onPanStart adds it instead when the press turns into a drag.
+      _addOrSelectOutlinePoint(_previewPxToMm(details.localPosition, size), size);
       return;
     }
     if (_controller.useCustomOutline && !_addingOutlinePoint) {
@@ -927,6 +951,13 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
         });
         return;
       }
+      // Ignore the first few pixels, so a slightly shaky click on a point
+      // (e.g. a traced one, off the grid) doesn't snap it somewhere else.
+      final startPx = _outlinePointDragStartPx;
+      if (startPx != null) {
+        if ((details.localPosition - startPx).distance < _outlinePointDragDeadZonePx) return;
+        _outlinePointDragStartPx = null;
+      }
       final mm = _snapDrag(rawMm, size);
       setState(() {
         _controller.moveOutlinePoint(opIndex, mm);
@@ -978,6 +1009,65 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
 
   void _onPreviewPanEnd(DragEndDetails details) => _finishDrag();
 
+  /// The primary-button press on the canvas being tracked, where it went
+  /// down, and whether it has moved far enough to be a drag.
+  int? _canvasPointer;
+  Offset _canvasDownPx = Offset.zero;
+  bool _canvasDragging = false;
+
+  void _onCanvasPointerDown(PointerDownEvent event) {
+    if (event.buttons & kPrimaryButton == 0) return;
+    // A press still being tracked means its release never arrived: end
+    // whatever it was doing before starting over.
+    if (_canvasPointer != null) _onCanvasPointerCancel(null);
+    _canvasPointer = event.pointer;
+    _canvasDownPx = event.localPosition;
+    _canvasDragging = false;
+  }
+
+  void _onCanvasPointerMove(PointerMoveEvent event, Size size) {
+    if (event.pointer != _canvasPointer) return;
+    if (!_canvasDragging) {
+      if ((event.localPosition - _canvasDownPx).distance <= computePanSlop(event.kind, null)) return;
+      _canvasDragging = true;
+      // Start the drag from where the button went down, not where the
+      // pointer is now: otherwise a quick drag starting on a small handle,
+      // hole or point has moved off it before we look for what was grabbed.
+      _onPreviewPanStart(
+        DragStartDetails(
+          localPosition: _canvasDownPx,
+          globalPosition: event.position - (event.localPosition - _canvasDownPx),
+          kind: event.kind,
+        ),
+        size,
+      );
+    }
+    _onPreviewPanUpdate(
+      DragUpdateDetails(localPosition: event.localPosition, globalPosition: event.position, delta: event.delta),
+      size,
+    );
+  }
+
+  void _onCanvasPointerUp(PointerUpEvent event, Size size) {
+    if (event.pointer != _canvasPointer) return;
+    _canvasPointer = null;
+    if (_canvasDragging) {
+      _onPreviewPanEnd(DragEndDetails());
+      return;
+    }
+    final at = _canvasDownPx;
+    final global = event.position - (event.localPosition - at);
+    _onPreviewTapDown(TapDownDetails(localPosition: at, globalPosition: global, kind: event.kind), size);
+    _onPreviewTapUp(TapUpDetails(localPosition: at, globalPosition: global, kind: event.kind), size);
+  }
+
+  void _onCanvasPointerCancel(PointerCancelEvent? event) {
+    if (event != null && event.pointer != _canvasPointer) return;
+    _canvasPointer = null;
+    if (_canvasDragging) _finishDrag();
+    _canvasDragging = false;
+  }
+
   /// Ends whatever canvas drag is in progress. Also used when the gesture is
   /// cancelled or the pointer leaves the canvas (e.g. off the window), where
   /// no pointer-up may ever arrive: without it the drag would stay "on" and
@@ -1001,6 +1091,7 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
     _draggingHoleId = null;
     _draggingOutlinePointIndex = null;
     _outlinePointResizeStart = null;
+    _outlinePointDragStartPx = null;
     _holeHandle = null;
     _draggingNoteId = null;
     _noteHandle = null;
@@ -1035,6 +1126,17 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
       _snack('No new holes found. Try "Auto-fit to outline" first.');
     } else {
       _snack('Added $added hole${added == 1 ? '' : 's'} -- check them against the image');
+    }
+  }
+
+  Future<void> _traceOutline() async {
+    final count = await _controller.traceOutlineFromImage();
+    if (!mounted) return;
+    setState(() => _addingOutlinePoint = false);
+    if (count == null) {
+      _snack('Could not find a board outline in the image');
+    } else {
+      _snack('Traced custom outline with $count points -- check it against the image');
     }
   }
 
@@ -1245,6 +1347,11 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                 onPressed: _detectHoles,
                 icon: const Icon(Icons.search),
                 label: const Text('Find holes'),
+              ),
+              FilledButton.tonalIcon(
+                onPressed: _traceOutline,
+                icon: const Icon(Icons.polyline),
+                label: const Text('Trace outline'),
               ),
               OutlinedButton(
                 onPressed: () => setState(() {
@@ -1864,9 +1971,9 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'Click a point to select it, then drag to move it. Click Add outline point, then click the '
-                    'canvas to insert new points after the selected one (so click a point on the side you want '
-                    'to extend first) -- or double-click an edge to insert one there without switching modes. '
+                    'Click a point to select it, then drag to move it. Click Add outline point, then click on or '
+                    'near an edge to insert a new point into it -- or double-click an edge to insert one there '
+                    'without switching modes. '
                     'Shift+drag a point to grow its fillet/chamfer. Delete removes the selected point. At least '
                     '3 points are needed to use the shape.',
                     style: Theme.of(context).textTheme.bodySmall,
@@ -2028,18 +2135,17 @@ class _TemplateMakerScreenState extends State<TemplateMakerScreen> {
                           setState(() => _measureHover = null);
                         }
                       },
-                      child: GestureDetector(
+                      // Clicks and drags come from raw pointer events rather than a
+                      // GestureDetector: on Windows a mouse-up sometimes never arrives, and
+                      // the tap/pan recognizers then stay stuck on that press -- every later
+                      // drag reports the stale press position and never ends. Here a new
+                      // press always starts fresh.
+                      child: Listener(
                       behavior: HitTestBehavior.opaque,
-                      onTapDown: (details) => _onPreviewTapDown(details, size),
-                      onTapUp: (details) => _onPreviewTapUp(details, size),
-                      // Report the drag from where the pointer went down, not from where it
-                      // already is after the first move: otherwise a quick drag starting on a
-                      // small handle or hole has moved off it before we look for what was grabbed.
-                      dragStartBehavior: DragStartBehavior.down,
-                      onPanStart: (details) => _onPreviewPanStart(details, size),
-                      onPanUpdate: (details) => _onPreviewPanUpdate(details, size),
-                      onPanEnd: _onPreviewPanEnd,
-                      onPanCancel: _finishDrag,
+                      onPointerDown: _onCanvasPointerDown,
+                      onPointerMove: (event) => _onCanvasPointerMove(event, size),
+                      onPointerUp: (event) => _onCanvasPointerUp(event, size),
+                      onPointerCancel: _onCanvasPointerCancel,
                       child: ClipRect(
                         child: CustomPaint(
                         painter: TemplateOutlinePainter(

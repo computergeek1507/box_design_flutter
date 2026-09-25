@@ -51,37 +51,10 @@ const int _inkThreshold = 70;
 ImageDetection? detectBoardAndHoles(Uint8List rgba, int w, int h, {double outlineWidthMm = 100, double outlineHeightMm = 100}) {
   if (w < 8 || h < 8 || rgba.length < w * h * 4) return null;
 
-  final bg = _backgroundColor(rgba, w, h);
-  // Two views of the image: "ink" (strongly different from the page --
-  // outline and hole strokes) and "fill" (anything even slightly different,
-  // e.g. a tinted board face). Drawings with stroked outlines use the ink
-  // view, which ignores tinted fills, grid lines and soft UI shadows; a
-  // stroke-less picture falls back to the fill view.
-  final inkMask = Uint8List(w * h);
-  final fillMask = Uint8List(w * h);
-  for (var i = 0; i < w * h; i++) {
-    final o = i * 4;
-    if (rgba[o + 3] <= 40) continue; // transparent = background
-    final d = math.max(
-      (rgba[o] - bg[0]).abs(),
-      math.max((rgba[o + 1] - bg[1]).abs(), (rgba[o + 2] - bg[2]).abs()),
-    );
-    if (d > _fillThreshold) fillMask[i] = 1;
-    if (d > _inkThreshold) inkMask[i] = 1;
-  }
-
-  final ink = _largestComponent(inkMask, 1, w, h, Int32List(w * h));
-  final fill = _largestComponent(fillMask, 1, w, h, Int32List(w * h));
-  final _Component? board;
-  final Uint8List fg;
-  if (ink != null && (fill == null || ink.bboxArea >= 0.25 * fill.bboxArea)) {
-    board = ink;
-    fg = inkMask;
-  } else {
-    board = fill;
-    fg = fillMask;
-  }
-  if (board == null) return null;
+  final found = _findBoard(rgba, w, h);
+  if (found == null) return null;
+  final board = found.board;
+  final fg = found.mask;
 
   // Inset by ~1px: the outline stroke is a couple of pixels thick and the
   // real edge is its centre.
@@ -218,6 +191,204 @@ ImageDetection? detectBoardAndHoles(Uint8List rgba, int w, int h, {double outlin
   }
 
   return ImageDetection(outline, holes);
+}
+
+class _BoardFind {
+  final _Component board;
+
+  /// The mask (ink or fill view) the board was found in.
+  final Uint8List mask;
+
+  /// Component labels for [mask]; the board's pixels carry [board.label].
+  final Int32List labels;
+
+  const _BoardFind(this.board, this.mask, this.labels);
+}
+
+/// Finds the board -- the biggest blob that differs from the page
+/// background -- in either the "ink" view (strongly different from the page:
+/// outline and hole strokes) or the "fill" view (anything even slightly
+/// different, e.g. a tinted board face). Drawings with stroked outlines use
+/// the ink view, which ignores tinted fills, grid lines and soft UI shadows;
+/// a stroke-less picture falls back to the fill view.
+_BoardFind? _findBoard(Uint8List rgba, int w, int h) {
+  final bg = _backgroundColor(rgba, w, h);
+  final inkMask = Uint8List(w * h);
+  final fillMask = Uint8List(w * h);
+  for (var i = 0; i < w * h; i++) {
+    final o = i * 4;
+    if (rgba[o + 3] <= 40) continue; // transparent = background
+    final d = math.max(
+      (rgba[o] - bg[0]).abs(),
+      math.max((rgba[o + 1] - bg[1]).abs(), (rgba[o + 2] - bg[2]).abs()),
+    );
+    if (d > _fillThreshold) fillMask[i] = 1;
+    if (d > _inkThreshold) inkMask[i] = 1;
+  }
+
+  final inkLabels = Int32List(w * h), fillLabels = Int32List(w * h);
+  final ink = _largestComponent(inkMask, 1, w, h, inkLabels);
+  final fill = _largestComponent(fillMask, 1, w, h, fillLabels);
+  if (ink != null && (fill == null || ink.bboxArea >= 0.25 * fill.bboxArea)) {
+    return _BoardFind(ink, inkMask, inkLabels);
+  }
+  if (fill == null) return null;
+  return _BoardFind(fill, fillMask, fillLabels);
+}
+
+/// Traces the board's outer edge in a screenshot/drawing as a closed
+/// polygon in image pixels (Y down), simplified so straight edges become
+/// single segments. [tolerancePx] is how far the polygon may stray from the
+/// traced edge; by default ~0.4% of the board's diagonal (at least 1px).
+/// Holes and any gaps inside the board are ignored. Returns null when no
+/// board could be found.
+List<math.Point<double>>? traceBoardOutline(Uint8List rgba, int w, int h, {double? tolerancePx}) {
+  if (w < 8 || h < 8 || rgba.length < w * h * 4) return null;
+  final found = _findBoard(rgba, w, h);
+  if (found == null) return null;
+  final b = found.board;
+  if (b.maxX - b.minX < 10 || b.maxY - b.minY < 10) return null;
+
+  // Solid board mask over the board's bbox plus a 1px empty border: the
+  // board's own pixels plus everything they enclose (flood the outside in
+  // from the border; whatever the flood can't reach is inside).
+  final bw = b.maxX - b.minX + 3, bh = b.maxY - b.minY + 3;
+  final solid = Uint8List(bw * bh);
+  for (var y = 1; y < bh - 1; y++) {
+    for (var x = 1; x < bw - 1; x++) {
+      if (found.labels[(b.minY + y - 1) * w + (b.minX + x - 1)] == b.label) solid[y * bw + x] = 1;
+    }
+  }
+  final outside = Uint8List(bw * bh);
+  final stack = Int32List(bw * bh);
+  var sp = 0;
+  outside[0] = 1;
+  stack[sp++] = 0;
+  while (sp > 0) {
+    final p = stack[--sp];
+    final x = p % bw, y = p ~/ bw;
+    void visit(int nx, int ny) {
+      if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) return;
+      final ni = ny * bw + nx;
+      if (outside[ni] == 1 || solid[ni] == 1) return;
+      outside[ni] = 1;
+      stack[sp++] = ni;
+    }
+
+    visit(x - 1, y);
+    visit(x + 1, y);
+    visit(x, y - 1);
+    visit(x, y + 1);
+  }
+  for (var i = 0; i < bw * bh; i++) {
+    solid[i] = outside[i] == 1 ? 0 : 1;
+  }
+
+  // Moore-neighbour trace of the outer boundary, starting from the first
+  // solid pixel in raster order (its west neighbour is known to be empty).
+  var start = -1;
+  for (var i = 0; i < bw * bh; i++) {
+    if (solid[i] == 1) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return null;
+  // Neighbour directions, clockwise on screen (Y down), starting west.
+  const dxs = [-1, -1, 0, 1, 1, 1, 0, -1];
+  const dys = [0, -1, -1, -1, 0, 1, 1, 1];
+  final boundary = <math.Point<double>>[];
+  var cur = start;
+  var back = 0; // direction of the last empty neighbour checked
+  final maxSteps = 4 * bw * bh;
+  for (var step = 0; step < maxSteps; step++) {
+    final cx = cur % bw, cy = cur ~/ bw;
+    boundary.add(math.Point(b.minX + cx - 1 + 0.5, b.minY + cy - 1 + 0.5));
+    var next = -1;
+    for (var k = 1; k <= 8; k++) {
+      final d = (back + k) % 8;
+      final nx = cx + dxs[d], ny = cy + dys[d];
+      if (solid[ny * bw + nx] == 1) {
+        next = ny * bw + nx;
+        // The empty neighbour checked just before this one, as seen from
+        // the new pixel, is where the next search starts.
+        final pd = (d + 7) % 8;
+        back = _dirFrom(nx, ny, cx + dxs[pd], cy + dys[pd]);
+        break;
+      }
+    }
+    if (next < 0) break; // single isolated pixel
+    cur = next;
+    if (cur == start) break;
+  }
+  if (boundary.length < 3) return null;
+
+  final diag = math.sqrt(math.pow(b.maxX - b.minX, 2) + math.pow(b.maxY - b.minY, 2));
+  final tol = tolerancePx ?? math.max(1.0, diag * 0.004);
+  final simplified = _simplifyClosed(boundary, tol);
+  return simplified.length < 3 ? null : simplified;
+}
+
+/// Direction index (as in [traceBoardOutline]'s tables) from (x, y) to its
+/// 8-neighbour (tx, ty).
+int _dirFrom(int x, int y, int tx, int ty) {
+  const table = [1, 2, 3, 0, -1, 4, 7, 6, 5]; // indexed by (dy+1)*3 + (dx+1)
+  return table[(ty - y + 1) * 3 + (tx - x + 1)];
+}
+
+/// Ramer-Douglas-Peucker on a closed ring: splits it at two mutually far
+/// points and simplifies each half.
+List<math.Point<double>> _simplifyClosed(List<math.Point<double>> ring, double tol) {
+  final n = ring.length;
+  int farthestFrom(int from) {
+    var best = -1.0, idx = 0;
+    for (var i = 0; i < n; i++) {
+      final d = ring[from].squaredDistanceTo(ring[i]);
+      if (d > best) {
+        best = d;
+        idx = i;
+      }
+    }
+    return idx;
+  }
+
+  final p = farthestFrom(0);
+  final q = farthestFrom(p);
+  final a = math.min(p, q), b = math.max(p, q);
+  if (a == b) return List.of(ring);
+  final s1 = _rdp(ring.sublist(a, b + 1), tol);
+  final s2 = _rdp([...ring.sublist(b), ...ring.sublist(0, a + 1)], tol);
+  return [...s1.sublist(0, s1.length - 1), ...s2.sublist(0, s2.length - 1)];
+}
+
+List<math.Point<double>> _rdp(List<math.Point<double>> pts, double tol) {
+  if (pts.length < 3) return List.of(pts);
+  final keep = List<bool>.filled(pts.length, false);
+  keep[0] = keep[pts.length - 1] = true;
+  final ranges = <(int, int)>[(0, pts.length - 1)];
+  while (ranges.isNotEmpty) {
+    final (s, e) = ranges.removeLast();
+    if (e - s < 2) continue;
+    final p0 = pts[s], p1 = pts[e];
+    final dx = p1.x - p0.x, dy = p1.y - p0.y;
+    final len = math.sqrt(dx * dx + dy * dy);
+    var maxD = -1.0;
+    var idx = -1;
+    for (var i = s + 1; i < e; i++) {
+      final q = pts[i];
+      final d = len < 1e-9 ? q.distanceTo(p0) : ((q.x - p0.x) * dy - (q.y - p0.y) * dx).abs() / len;
+      if (d > maxD) {
+        maxD = d;
+        idx = i;
+      }
+    }
+    if (maxD > tol) {
+      keep[idx] = true;
+      ranges.add((s, idx));
+      ranges.add((idx, e));
+    }
+  }
+  return [for (var i = 0; i < pts.length; i++) if (keep[i]) pts[i]];
 }
 
 List<int> _backgroundColor(Uint8List rgba, int w, int h) {
